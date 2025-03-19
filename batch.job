@@ -1,0 +1,45 @@
+#!/bin/bash
+#SBATCH -t 165:00:00
+#SBATCH --ntasks=1
+#SBATCH --nodes=1
+#SBATCH --job-name=simple
+#SBATCH --partition=all
+#SBATCH --gres=gpu:1
+#SBATCH --mem=128G
+#SBATCH --cpus-per-task=32
+#SBATCH --output=./outputs/slurm_output_%A.out
+#SBATCH --exclude=ivi-cn005,ivi-cn009,ivi-cn010,ivi-cn011,ivi-cn012,ivi-cn001
+
+echo "TX Adaptivity Experiments"
+echo | date
+echo "Node name: $(hostname)"
+echo -n memory=; ulimit -m
+echo -n nproc=; nproc
+
+nvidia-smi
+
+# Initialize Conda and activate environment
+eval "$(conda shell.bash hook)"
+conda activate prune_llm
+
+# python Wanda_adaptivity.py --model vit_base_patch16_224 --data_path /ssdstore/ImageNet/ --resume ./model_weights/vit/jx_vit_base_p16_224-80ecf9dd.pth --prune_metric wanda --prune_granularity row --sparsity 0.5 --nsamples 128
+# python prune_vit_timm.py --model vit_base_patch16_224 --pretrained
+
+srun python compare_tensor.py
+
+# srun python ViT_adaptivity.py \
+#     --model_name google/vit-base-patch16-224 \
+#     --pruning_type l1 \
+#     --pruning_ratio 0.25 \
+#     --taylor_batchs 10 \
+#     --data_path /ssdstore/ImageNet/ \
+#     --train_batch_size 128 \
+#     --val_batch_size 128 \
+#     --save_as saves/state_dicts/ \
+#     --test_accuracy \
+#     --rebuild \
+#     --epochs 50 \
+
+
+echo "Job Complete"
+echo | date
