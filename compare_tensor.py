@@ -37,8 +37,8 @@ def compare_weights(sample_layer="vit.encoder.layer.0.attention.attention.key"):
         # path_core = "./saves/state_dicts/Vit_b_16_Pruned_state_dict_toy.pth"
         # path_rebuilt = "./saves/state_dicts/Vit_b_16_Rebuilt_state_dict_toy.pth"
 
-        path_core = "./saves/state_dicts/Vit_b_16_Pruned_0.25_state_dict_SGD.pth"
-        path_rebuilt = "./saves/state_dicts/Vit_b_16_Rebuilt_0.25_state_dict_SGD.pth"
+        path_core = "./saves/state_dicts/Vit_b_16_Pruned_0.25_state_dict_Freezing_Trial.pth"
+        path_rebuilt = "./saves/state_dicts/Vit_b_16_Rebuilt_0.25_state_dict_Freezing_Trial.pth"
 
         prune_dict = torch.load(path_core, map_location=device)
         rebuilt_dict = torch.load(path_rebuilt, map_location=device)
@@ -80,3 +80,21 @@ if __name__ == '__main__':
 
     # print(cls_token.shape)
     # print(pos_embed.shape)
+
+
+    # FOR DEBUGGING
+    # for name, layer in model.named_modules():
+    #     if name == "vit.encoder.layer.0.attention.attention.key":
+    #         freeze_dim0 = torch.tensor(non_pruned_index_out[name], dtype=torch.long, device=device)
+    #         freeze_dim1 = torch.tensor(non_pruned_index_in[name], dtype=torch.long, device=device)
+    #         t1 = layer.weight[freeze_dim0[:, None], freeze_dim1]
+    #         print(t1.shape)
+    #         # print(t1)
+
+    #         t2 = torch.tensor(non_pruned_weights[name]["Weight"], device=device)
+    #         print(t2.shape)
+    #         # print(t2)
+            
+    #         print(t1==t2)
+    #         overlap = torch.isin(t1, t2)
+    #         print(t1[overlap].shape)

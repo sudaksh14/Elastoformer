@@ -22,9 +22,6 @@ nvidia-smi
 eval "$(conda shell.bash hook)"
 conda activate prune_llm
 
-# python Wanda_adaptivity.py --model vit_base_patch16_224 --data_path /ssdstore/ImageNet/ --resume ./model_weights/vit/jx_vit_base_p16_224-80ecf9dd.pth --prune_metric wanda --prune_granularity row --sparsity 0.5 --nsamples 128
-# python prune_vit_timm.py --model vit_base_patch16_224 --pretrained
-
 srun python compare_tensor.py
 
 # srun python ViT_adaptivity.py \

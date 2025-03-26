@@ -244,6 +244,61 @@ class ViTSelfAttention(nn.Module):
 
         return outputs
 
+class GenericViTSelfAttention(nn.Module):
+    def __init__(self, 
+                 embed_dim,      # Input embedding dimension
+                 query_dim,      # Query projection dimension
+                 key_dim,        # Key projection dimension
+                 value_dim,      # Value projection dimension
+                 num_heads=8,    # Number of attention heads
+                 dropout=0.1):   # Dropout rate
+        super().__init__()
+
+        self.num_heads = num_heads
+        self.head_dim = query_dim // num_heads  # Split query_dim across heads
+        
+        # Define learnable projections for query, key, and value
+        self.query = nn.Linear(embed_dim, query_dim)
+        self.key = nn.Linear(embed_dim, key_dim)
+        self.value = nn.Linear(embed_dim, value_dim)
+        
+        # Output projection layer
+        self.out_proj = nn.Linear(value_dim, embed_dim)
+
+        # Dropout layer
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        """
+        x: (batch_size, seq_length, embed_dim)
+        """
+        batch_size, seq_length, embed_dim = x.shape
+
+        # Compute Queries, Keys, and Values
+        q = self.query(x)  # Shape: (batch_size, seq_length, query_dim)
+        k = self.key(x)    # Shape: (batch_size, seq_length, key_dim)
+        v = self.value(x)  # Shape: (batch_size, seq_length, value_dim)
+
+        # Reshape for multi-head attention
+        q = q.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)  # (B, H, L, D)
+        k = k.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)  # (B, H, L, D)
+        v = v.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)  # (B, H, L, D)
+
+        # Compute Scaled Dot-Product Attention
+        attention_scores = torch.matmul(q, k.transpose(-1, -2)) / (self.head_dim ** 0.5)
+        attention_probs = F.softmax(attention_scores, dim=-1)
+        attention_probs = self.dropout(attention_probs)
+
+        # Apply attention to values
+        context = torch.matmul(attention_probs, v)  # (B, H, L, D)
+
+        # Merge heads back
+        context = context.transpose(1, 2).reshape(batch_size, seq_length, -1)  # (B, L, value_dim)
+
+        # Final output projection
+        out = self.out_proj(context)
+
+        return out
 
 class ViTSdpaSelfAttention(ViTSelfAttention):
     def __init__(self, config: ViTConfig) -> None:

@@ -16,7 +16,7 @@ from torch import nn
 from torch.utils.data.dataloader import default_collate
 from torchvision.transforms.functional import InterpolationMode
 from aug_transforms import get_mixup_cutmix
-from prune_utils import zero_out_gradients, zero_out_gradients_v2
+from prune_utils import zero_out_gradients, zero_out_gradients_v2, zero_out_gradients_v3
 
 
 def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None):
@@ -83,13 +83,18 @@ def train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criteri
             if args.clip_grad_norm is not None:
                 # we should unscale the gradients of optimizer's assigned params if do gradient clipping
                 scaler.unscale_(optimizer)
-                zero_out_gradients_v2(model.module, optimizer, in_freeze_indices, out_freeze_indices)
+
+                # zero_out_gradients_v2(model.module, optimizer, in_freeze_indices, out_freeze_indices)
+                zero_out_gradients_v3(model.module, in_freeze_indices, out_freeze_indices)
                 nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
             scaler.step(optimizer)
             scaler.update()
+        
         else:
             loss.backward()
-            zero_out_gradients(model.module, in_freeze_indices, out_freeze_indices) # Use model.module to zero out grads in DDP training
+            # Use model.module to zero out grads in DDP training
+            # zero_out_gradients_v2(model.module, optimizer, in_freeze_indices, out_freeze_indices)
+            zero_out_gradients_v3(model.module, in_freeze_indices, out_freeze_indices) 
             if args.clip_grad_norm is not None:
                 nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
             optimizer.step()
@@ -333,10 +338,12 @@ def fine_tuner(args, model, data_loader, data_loader_test, train_sampler, test_s
         optimizer = torch.optim.RMSprop(
             parameters, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, eps=0.0316, alpha=0.9
         )
+    elif opt_name == "adam":
+        optimizer = torch.optim.Adam(parameters, lr=args.lr, weight_decay=args.weight_decay)
     elif opt_name == "adamw":
         optimizer = torch.optim.AdamW(parameters, lr=args.lr, weight_decay=args.weight_decay)
     else:
-        raise RuntimeError(f"Invalid optimizer {args.opt}. Only SGD, RMSprop and AdamW are supported.")
+        raise RuntimeError(f"Invalid optimizer {args.opt}. Only SGD, RMSprop, Adam and AdamW are supported.")
 
     scaler = torch.cuda.amp.GradScaler() if args.amp else None
 
@@ -414,7 +421,7 @@ def fine_tuner(args, model, data_loader, data_loader_test, train_sampler, test_s
             evaluate(model, criterion, data_loader_test, device=device)
         return
 
-    if args.wandb:
+    if args.log_wandb:
         if args.distributed:
             if utils.get_rank() == 0:
                 wandb.init(
@@ -445,7 +452,7 @@ def fine_tuner(args, model, data_loader, data_loader_test, train_sampler, test_s
         
         wandb_metrics = metrics.get_all_averages()
 
-        if args.wandb:
+        if args.log_wandb:
             if args.distributed:
                 if utils.get_rank() == 0:
                     wandb.log({"epoch": epoch,

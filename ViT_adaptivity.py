@@ -47,6 +47,7 @@ def get_args_parser(add_help=True):
     parser.add_argument('--train_batch_size', default=64, type=int, help='train batch size')
     parser.add_argument('--val_batch_size', default=128, type=int, help='val batch size')
     parser.add_argument('--save_as', default=None, type=str, help='save as')
+    parser.add_argument('--debug', default=False, action='store_true', help='Use for dubugging')
 
     ###################################################################################################################
     #                                                 FINE-TUNING                                                     #
@@ -66,7 +67,7 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         "--wd",
         "--weight-decay",
-        default=0.3,
+        default=0,
         type=float,
         metavar="W",
         help="weight decay (default: 1e-4)",
@@ -96,7 +97,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--mixup-alpha", default=0.2, type=float, help="mixup alpha (default: 0.0)")
     parser.add_argument("--cutmix-alpha", default=1.0, type=float, help="cutmix alpha (default: 0.0)")
     parser.add_argument("--lr-scheduler", default="cosineannealinglr", type=str, help="the lr scheduler (default: steplr)")
-    parser.add_argument("--lr-warmup-epochs", default=30, type=int, help="the number of epochs to warmup (default: 0)")
+    parser.add_argument("--lr-warmup-epochs", default=10, type=int, help="the number of epochs to warmup (default: 0)")
     parser.add_argument(
         "--lr-warmup-method", default="linear", type=str, help="the warmup method (default: constant)"
     )
@@ -168,7 +169,7 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         "--train-crop-size", default=224, type=int, help="the random crop size used for training (default: 224)"
     )
-    parser.add_argument("--clip-grad-norm", default=1, type=float, help="the maximum gradient norm (default None)")
+    parser.add_argument("--clip-grad-norm", default=0, type=float, help="the maximum gradient norm (default None)")
     parser.add_argument("--ra-sampler", action="store_true", help="whether to use Repeated Augmentation in training")
     parser.add_argument(
         "--ra-reps", default=3, type=int, help="number of repetitions for Repeated Augmentation (default: 3)"
@@ -176,7 +177,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--weights", default=None, type=str, help="the weights enum name to load")
     parser.add_argument("--backend", default="PIL", type=str.lower, help="PIL or tensor - case insensitive")
     parser.add_argument("--use-v2", action="store_true", help="Use V2 transforms")
-    parser.add_argument("--wandb", action="store_true", help="Use Weights and Bias to log the training curves")
+    parser.add_argument("--log_wandb", action="store_true", help="Use Weights and Bias to log the training curves")
     return parser
 
 
@@ -227,12 +228,12 @@ def prepare_imagenet(imagenet_root, train_batch_size=64, val_batch_size=128, num
     # val_loader = torch.utils.data.DataLoader(val_dst, batch_size=val_batch_size, shuffle=False, num_workers=num_workers)
 
     # Just For Debugging
-    if debug:
-        train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:500])
-        val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:100])
-    else:
-        train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:100000])
-        val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:10000])
+    # if debug:
+    #     train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:500])
+    #     val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:100])
+    # else:
+    #     train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:100000])
+    #     val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:10000])
 
     
     if args.distributed:    
@@ -412,7 +413,7 @@ def main(args):
     else: raise NotImplementedError
 
     if args.pruning_type=='taylor' or args.test_accuracy:
-        train_loader, val_loader, train_sampler, val_sampler = prepare_imagenet(args.data_path, train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size, debug=True)
+        train_loader, val_loader, train_sampler, val_sampler = prepare_imagenet(args.data_path, train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size, debug=args.debug)
 
 
     # Load the model
@@ -599,7 +600,7 @@ def main(args):
             print()
 
     # Fine-Tune the pruned model
-    # fine_tuner(args, model, train_loader, val_loader, train_sampler, val_sampler)
+    fine_tuner(args, model, train_loader, val_loader, train_sampler, val_sampler)
 
     if args.test_accuracy:
         print("Testing accuracy of the pruned model...")
@@ -628,14 +629,14 @@ def main(args):
         rebuilt_model = create_vit_general(dim_dict=orig_dimensions).to(device)
         # rebuilt_model = ViTForImageClassification.from_pretrained(args.model_name).to(device)
 
-        rebuilt_model = update_vit_weights(rebuilt_model, [pruned_index_in, pruned_index_out], [non_pruned_index_in, 
-                                        non_pruned_index_out], pruned_weights, non_pruned_weights).to(device)
-
+        rebuilt_model = update_vit_weights(rebuilt_model, [pruned_index_in, pruned_index_out], [non_pruned_index_in, non_pruned_index_out], pruned_weights, non_pruned_weights).to(device)
+        
         # partial freezing of grads for freezing the core weights
         freeze_partial_weights(rebuilt_model, pruned_index_in, pruned_index_out, device)
-        exit()
 
         fine_tuner(args, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler)
+        # fine_tuner(args, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler, rebuild=True, in_freeze_indices=pruned_index_in, out_freeze_indices=pruned_index_out)
+
         
         if args.test_accuracy:
             print("Testing accuracy of the rebuild model...")

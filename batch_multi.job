@@ -2,7 +2,7 @@
 #SBATCH --job-name=simple
 #SBATCH -t 165:00:00
 #SBATCH --partition=all           # Change based on cluster
-#SBATCH --nodes=1                 # Number of nodes
+#SBATCH --nodes=2                 # Number of nodes
 #SBATCH --ntasks-per-node=1       # One task per node
 #SBATCH --gres=gpu:4              # GPUs per node (adjust if needed)
 #SBATCH --mem=128G                # Memory per node
@@ -30,9 +30,26 @@ export MASTER_PORT=29500
 GPUS_PER_NODE=${SLURM_GPUS_PER_TASK:-$SLURM_GPUS_ON_NODE}
 export WORLD_SIZE=$(( $SLURM_NTASKS * GPUS_PER_NODE ))
 
+srun python ViT_adaptivity.py \
+    --exp_name ViT_Adaptivity_Freeze \
+    --model_name google/vit-base-patch16-224 \
+    --pruning_type l1 \
+    --pruning_ratio 0.25 \
+    --taylor_batchs 10 \
+    --data_path /ssdstore/ImageNet/ \
+    --train_batch_size 128 \
+    --val_batch_size 128 \
+    --save_as saves/state_dicts/ \
+    --test_accuracy \
+    --rebuild \
+    --epochs 100 \
+    --distributed --model-ema \
+    --amp --ra-sampler \
+    --log_wandb
 
-# srun python ViT_adaptivity.py \
-#     --exp_name ViT_Adaptivity \
+
+# CUDA_LAUNCH_BLOCKING=1 srun python ViT_adaptivity.py \
+#     --exp_name Freezing_Trial \
 #     --model_name google/vit-base-patch16-224 \
 #     --pruning_type l1 \
 #     --pruning_ratio 0.25 \
@@ -46,25 +63,8 @@ export WORLD_SIZE=$(( $SLURM_NTASKS * GPUS_PER_NODE ))
 #     --epochs 2 \
 #     --distributed --model-ema \
 #     --amp --ra-sampler \
-#     --wandb
-
-
-srun python ViT_adaptivity.py \
-    --exp_name SGD \
-    --model_name google/vit-base-patch16-224 \
-    --pruning_type l1 \
-    --pruning_ratio 0.25 \
-    --taylor_batchs 10 \
-    --data_path /ssdstore/ImageNet/ \
-    --train_batch_size 128 \
-    --val_batch_size 128 \
-    --save_as saves/state_dicts/ \
-    --test_accuracy \
-    --rebuild \
-    --epochs 2 \
-    --distributed --model-ema \
-    --amp --ra-sampler \
-    --opt sgd --wd 0 \
+#     --wd 0 \
+#     --debug \
 
 echo "Job Complete"
 echo | date

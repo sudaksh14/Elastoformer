@@ -773,21 +773,21 @@ def zero_out_gradients_v2(model, optimizer, in_indices, out_indices):
                 if layer.bias is not None:
                     layer.bias.grad[freeze_dim0] = 0
 
-            # Also clear AdamW momentum buffers for the frozen weights
-            for group in optimizer.param_groups:
-                for p in group['params']:
-                    if p is layer.weight:
-                        state = optimizer.state[p]
-                        if 'exp_avg' in state:
-                            state['exp_avg'][freeze_dim0[:, None], freeze_dim1] = 0
-                        if 'exp_avg_sq' in state:
-                            state['exp_avg_sq'][freeze_dim0[:, None], freeze_dim1] = 0
-                    elif p is layer.bias and layer.bias is not None:
-                        state = optimizer.state[p]
-                        if 'exp_avg' in state:
-                            state['exp_avg'][freeze_dim0] = 0
-                        if 'exp_avg_sq' in state:
-                            state['exp_avg_sq'][freeze_dim0] = 0
+                # Also clear AdamW momentum buffers for the frozen weights
+                for group in optimizer.param_groups:
+                    for p in group['params']:
+                        if p is layer.weight:
+                            state = optimizer.state[p]
+                            if 'exp_avg' in state:  
+                                state['exp_avg'][freeze_dim0[:, None], freeze_dim1] = 0
+                            if 'exp_avg_sq' in state:
+                                state['exp_avg_sq'][freeze_dim0[:, None], freeze_dim1] = 0
+                        elif p is layer.bias and layer.bias is not None:
+                            state = optimizer.state[p]
+                            if 'exp_avg' in state:
+                                state['exp_avg'][freeze_dim0] = 0
+                            if 'exp_avg_sq' in state:
+                                state['exp_avg_sq'][freeze_dim0] = 0
 
 
         elif isinstance(layer, (nn.LayerNorm, nn.Conv2d)):
@@ -799,21 +799,69 @@ def zero_out_gradients_v2(model, optimizer, in_indices, out_indices):
                 if layer.bias is not None:
                     layer.bias.grad[freeze_dim0] = 0
 
-            # Zero AdamW buffers
-            for group in optimizer.param_groups:
-                for p in group['params']:
-                    if p is layer.weight:
-                        state = optimizer.state[p]
-                        if 'exp_avg' in state:
-                            state['exp_avg'][freeze_dim0] = 0
-                        if 'exp_avg_sq' in state:
-                            state['exp_avg_sq'][freeze_dim0] = 0
-                    elif p is layer.bias and layer.bias is not None:
-                        state = optimizer.state[p]
-                        if 'exp_avg' in state:
-                            state['exp_avg'][freeze_dim0] = 0
-                        if 'exp_avg_sq' in state:
-                            state['exp_avg_sq'][freeze_dim0] = 0
+                # Zero AdamW buffers
+                for group in optimizer.param_groups:
+                    for p in group['params']:
+                        if p is layer.weight:
+                            state = optimizer.state[p]
+                            if 'exp_avg' in state:
+                                state['exp_avg'][freeze_dim0] = 0
+                            if 'exp_avg_sq' in state:
+                                state['exp_avg_sq'][freeze_dim0] = 0
+                        elif p is layer.bias and layer.bias is not None:
+                            state = optimizer.state[p]
+                            if 'exp_avg' in state:
+                                state['exp_avg'][freeze_dim0] = 0
+                            if 'exp_avg_sq' in state:
+                                state['exp_avg_sq'][freeze_dim0] = 0
+
+
+# More efficient in use of memory
+def zero_out_gradients_v3(model, in_indices, out_indices, device='cuda' if torch.cuda.is_available() else 'cpu'):
+    for layer_name, layer in model.named_modules():
+        
+        if not isinstance(layer, (nn.Linear, nn.LayerNorm, nn.Conv2d)):
+            continue
+        else:
+            if layer_name not in (in_indices.keys() | out_indices.keys()):
+                print(f"Warning: Layer '{layer_name}' not found in the Pruning Metadata")
+                continue
+
+        if layer.weight.grad is None:
+            print(f"Warning: Layer '{layer_name}' does not have gradients.")
+            continue
+
+        if 'classifier' in layer_name:
+            continue
+
+        elif isinstance(layer, nn.Linear):
+            # Get frozen indices
+            freeze_dim0 = torch.tensor(out_indices[layer_name], dtype=torch.long, device=device)  # dim 0 indices
+            freeze_dim1 = torch.tensor(in_indices[layer_name], dtype=torch.long, device=device)   # dim 1 indices
+
+            # Ensure indices are within valid range
+            freeze_dim0 = freeze_dim0[freeze_dim0 < layer.weight.grad.shape[0]]
+            freeze_dim1 = freeze_dim1[freeze_dim1 < layer.weight.grad.shape[1]]
+
+            # Create a grid of (dim0, dim1) combinations
+            grid_dim0, grid_dim1 = torch.meshgrid(freeze_dim0, freeze_dim1, indexing='ij')
+
+            # Zero out gradients at specified indices
+            with torch.no_grad():
+                layer.weight.grad[grid_dim0, grid_dim1] = 0
+                if layer.bias is not None:
+                        layer.bias.grad[freeze_dim0] = 0
+
+        elif isinstance(layer, (nn.LayerNorm, nn.Conv2d)):
+            freeze_dim0 = torch.tensor(out_indices[layer_name], dtype=torch.long, device=device)
+            
+            freeze_dim0 = freeze_dim0[freeze_dim0 < layer.weight.grad.shape[0]]
+
+            # Freeze non-pruned Gradients
+            with torch.no_grad():
+                layer.weight.grad[freeze_dim0] = 0
+                if layer.bias is not None:
+                    layer.bias.grad[freeze_dim0] = 0
 
 
 def freeze_partial_weights(model, in_indices, out_indices, device='cuda' if torch.cuda.is_available() else 'cpu'):
