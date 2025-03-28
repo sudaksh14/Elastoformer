@@ -34,11 +34,8 @@ def check_overlap(big_tensor, small_tensor):
 
 def compare_weights(sample_layer="vit.encoder.layer.0.attention.attention.key"):
     
-        # path_core = "./saves/state_dicts/Vit_b_16_Pruned_state_dict_toy.pth"
-        # path_rebuilt = "./saves/state_dicts/Vit_b_16_Rebuilt_state_dict_toy.pth"
-
-        path_core = "./saves/state_dicts/Vit_b_16_Pruned_0.25_state_dict_Freezing_Trial.pth"
-        path_rebuilt = "./saves/state_dicts/Vit_b_16_Rebuilt_0.25_state_dict_Freezing_Trial.pth"
+        path_core = "./saves/state_dicts/Vit_b_16_Pruned_0.25_state_dict_ViT_Adaptivity_Freeze_AdamW.pth"
+        path_rebuilt = "./saves/state_dicts/Vit_b_16_Rebuilt_0.25_state_dict_ViT_Adaptivity_Freeze_AdamW.pth"
 
         prune_dict = torch.load(path_core, map_location=device)
         rebuilt_dict = torch.load(path_rebuilt, map_location=device)
@@ -57,8 +54,8 @@ def compare_weights(sample_layer="vit.encoder.layer.0.attention.attention.key"):
         vit_core = create_vit_general(embed_dim=prune_embed, output_dim=prune_embed, ff_hidden_dim=prune_ff)
         vit_rebuilt = create_vit_general(embed_dim=rebuilt_embed, output_dim=rebuilt_embed, ff_hidden_dim=rebuilt_ff)
 
-        vit_core.load_state_dict(torch.load(path_core, map_location=device))
-        vit_rebuilt.load_state_dict(torch.load(path_rebuilt, map_location=device))
+        vit_core.load_state_dict(prune_dict)
+        vit_rebuilt.load_state_dict(rebuilt_dict)
 
         vit_core.eval()
         vit_rebuilt.eval()

@@ -44,7 +44,7 @@ def get_args_parser(add_help=True):
     parser.add_argument('--global_pruning', default=False, action='store_true', help='global pruning')
     parser.add_argument('--rebuild', default=False, action='store_true', help='Rebuilding for adaptivity')
 
-    parser.add_argument('--train_batch_size', default=64, type=int, help='train batch size')
+    parser.add_argument('--train_batch_size', default=128, type=int, help='train batch size')
     parser.add_argument('--val_batch_size', default=128, type=int, help='val batch size')
     parser.add_argument('--save_as', default=None, type=str, help='save as')
     parser.add_argument('--debug', default=False, action='store_true', help='Use for dubugging')
@@ -169,7 +169,7 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         "--train-crop-size", default=224, type=int, help="the random crop size used for training (default: 224)"
     )
-    parser.add_argument("--clip-grad-norm", default=0, type=float, help="the maximum gradient norm (default None)")
+    parser.add_argument("--clip-grad-norm", default=None, type=float, help="the maximum gradient norm (default None)")
     parser.add_argument("--ra-sampler", action="store_true", help="whether to use Repeated Augmentation in training")
     parser.add_argument(
         "--ra-reps", default=3, type=int, help="number of repetitions for Repeated Augmentation (default: 3)"
@@ -224,18 +224,13 @@ def prepare_imagenet(imagenet_root, train_batch_size=64, val_batch_size=128, num
                             )
     )
 
-    # train_loader = torch.utils.data.DataLoader(train_dst, batch_size=train_batch_size, shuffle=True, num_workers=num_workers)
-    # val_loader = torch.utils.data.DataLoader(val_dst, batch_size=val_batch_size, shuffle=False, num_workers=num_workers)
+    if debug:
+        train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:500])
+        val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:100])
+    else:
+        train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:100000])
+        val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:10000])
 
-    # Just For Debugging
-    # if debug:
-    #     train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:500])
-    #     val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:100])
-    # else:
-    #     train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:100000])
-    #     val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:10000])
-
-    
     if args.distributed:    
         if hasattr(args, "ra_sampler") and args.ra_sampler:
             train_sampler = RASampler(train_dst, shuffle=True, repetitions=args.ra_reps)
@@ -247,7 +242,7 @@ def prepare_imagenet(imagenet_root, train_batch_size=64, val_batch_size=128, num
         val_sampler = torch.utils.data.SequentialSampler(val_dst)
 
 
-    train_loader = torch.utils.data.DataLoader(train_dst, batch_size=val_batch_size, sampler=train_sampler, shuffle=False, num_workers=num_workers)
+    train_loader = torch.utils.data.DataLoader(train_dst, batch_size=train_batch_size, sampler=train_sampler, shuffle=False, num_workers=num_workers)
     val_loader = torch.utils.data.DataLoader(val_dst, batch_size=val_batch_size, sampler=val_sampler, shuffle=False, num_workers=num_workers)
     
     return train_loader, val_loader, train_sampler, val_sampler
@@ -374,8 +369,8 @@ def compare_performance(args):
     pruned_model = create_vit_general(embed_dim=prune_embed, output_dim=prune_embed, ff_hidden_dim=prune_ff).to(device)
     rebuilt_model = create_vit_general(embed_dim=rebuilt_embed, output_dim=rebuilt_embed, ff_hidden_dim=rebuilt_ff).to(device)
 
-    pruned_model.load_state_dict(torch.load(path_core, map_location=device))
-    rebuilt_model.load_state_dict(torch.load(path_rebuilt, map_location=device))
+    pruned_model.load_state_dict(prune_dict)
+    rebuilt_model.load_state_dict(rebuilt_dict)
 
     base_macs,_ = tp.utils.count_ops_and_params(original_model, example_inputs)
     pruned_macs,_ = tp.utils.count_ops_and_params(pruned_model, example_inputs)
@@ -386,6 +381,7 @@ def compare_performance(args):
     rebuilt_acc = evaluate(rebuilt_model, criterion, val_loader, device=device)
 
     plot_comparison(accuracy=[orig_acc, pruned_acc, rebuilt_acc], macs=[base_macs, pruned_macs, rebuilt_macs], pruning_ratio=args.pruning_ratio)
+    print("Plotting Complete")
 
 
 
@@ -439,8 +435,9 @@ def main(args):
     # visualize_weight_matrix(model, "vit.encoder.layer.0.attention.attention.query.weight", plot_name="original")
 
     if args.test_accuracy:
+        criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
         print("Testing accuracy of the original model...")
-        acc_ori, loss_ori = validate_model(model, val_loader, device)
+        acc_ori, loss_ori = evaluate(model, criterion, val_loader, device=device, dist=args.distributed)
         print("Accuracy: %.4f, Loss: %.4f"%(acc_ori, loss_ori))
 
     print("Pruning %s..."%args.model_name)
@@ -600,17 +597,17 @@ def main(args):
             print()
 
     # Fine-Tune the pruned model
-    fine_tuner(args, model, train_loader, val_loader, train_sampler, val_sampler)
+    fine_tuner(args, device, model, train_loader, val_loader, train_sampler, val_sampler)
 
     if args.test_accuracy:
         print("Testing accuracy of the pruned model...")
-        acc_pruned, loss_pruned = validate_model(model, val_loader, device)
+        acc_pruned, loss_pruned = evaluate(model, criterion, val_loader, device=device, dist=args.distributed)
         print("Accuracy: %.4f, Loss: %.4f"%(acc_pruned, loss_pruned))
 
     if args.save_as is not None:
         print("Saving the pruned model to %s..."%args.save_as)
         os.makedirs(os.path.dirname(args.save_as), exist_ok=True)
-        torch.save(model.state_dict(), f"{args.save_as}Vit_b_16_Pruned_{args.pruning_ratio}_state_dict_{args.exp_name}.pth")
+        torch.save(model.state_dict(), f"{args.save_as}Vit_b_16_Pruned_{str(args.pruning_ratio)}_state_dict_{args.exp_name}.pth")
 
     print("----------------------------------------")
     print("Summary:")
@@ -634,18 +631,18 @@ def main(args):
         # partial freezing of grads for freezing the core weights
         freeze_partial_weights(rebuilt_model, pruned_index_in, pruned_index_out, device)
 
-        fine_tuner(args, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler)
+        fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler)
         # fine_tuner(args, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler, rebuild=True, in_freeze_indices=pruned_index_in, out_freeze_indices=pruned_index_out)
 
         
         if args.test_accuracy:
             print("Testing accuracy of the rebuild model...")
-            acc_rebuilt, loss_rebuilt = validate_model(rebuilt_model, val_loader, device)
+            acc_rebuilt, loss_rebuilt = evaluate(rebuilt_model, criterion, val_loader, device=device, dist=args.distributed)
             print("Accuracy: %.4f, Loss: %.4f"%(acc_rebuilt, loss_rebuilt))
 
         if args.save_as is not None: 
             print("Saving the rebuilt model to %s..."%args.save_as)
-            torch.save(rebuilt_model.state_dict(), f"{args.save_as}Vit_b_16_Rebuilt_{args.pruning_ratio}_state_dict_{args.exp_name}.pth")
+            torch.save(rebuilt_model.state_dict(), f"{args.save_as}Vit_b_16_Rebuilt_{str(args.pruning_ratio)}_state_dict_{args.exp_name}.pth")
 
         print("----------------------------------------")
         print("Summary:")
@@ -655,6 +652,7 @@ def main(args):
         if args.test_accuracy:
             print("Base Loss: %.4f, Pruned Loss: %.4f, Rebuilt Loss: %.4f"%(loss_ori, loss_pruned, loss_rebuilt))
             print("Base Accuracy: %.4f, Pruned Accuracy: %.4f, Rebuilt Accuracy: %.4f"%(acc_ori, acc_pruned, acc_rebuilt))
+            plot_comparison(accuracy=[acc_ori, acc_pruned, acc_rebuilt], macs=[base_macs, pruned_macs, rebuilt_macs], pruning_ratio=args.pruning_ratio)
 
 
     

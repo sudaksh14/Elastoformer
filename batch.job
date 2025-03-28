@@ -25,6 +25,7 @@ conda activate prune_llm
 srun python compare_tensor.py
 
 # srun python ViT_adaptivity.py \
+#     --exp_name ViT_Adaptivity_Freeze_AdamW \
 #     --model_name google/vit-base-patch16-224 \
 #     --pruning_type l1 \
 #     --pruning_ratio 0.25 \
@@ -35,7 +36,7 @@ srun python compare_tensor.py
 #     --save_as saves/state_dicts/ \
 #     --test_accuracy \
 #     --rebuild \
-#     --epochs 50 \
+#     --epochs 1 \
 
 
 echo "Job Complete"

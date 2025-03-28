@@ -900,7 +900,7 @@ def change_module_name(pruning_dict):
 
     return new_dict
 
-def plot_comparison(accuracy, macs, pruning_ratio):
+def plot_comparison(accuracy, macs, pruning_ratio, name=None):
 
     # Data (replace with your values)
     x_labels = ["Original", "Pruned", "Rebuilt"]
@@ -928,7 +928,10 @@ def plot_comparison(accuracy, macs, pruning_ratio):
     plt.title("Accuracy vs MACs Across Model Stages")
     ax1.grid(True, linestyle="--", alpha=0.5)
 
-    plt.savefig(f"./saves/plots/comparison_plot_vit_b_16_PR_{pruning_ratio}.png")
+    if name is not None:
+        plt.savefig(f"./saves/plots/comparison_plot_vit_b_16_PR_{pruning_ratio}_{name}.png")
+    else:
+        plt.savefig(f"./saves/plots/comparison_plot_vit_b_16_PR_{pruning_ratio}.png")
 
 def plot_tensor(tensor, title="Tensor Plot", cmap='viridis', figsize=(6, 4)):
     """

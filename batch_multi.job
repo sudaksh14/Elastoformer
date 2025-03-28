@@ -2,11 +2,11 @@
 #SBATCH --job-name=simple
 #SBATCH -t 165:00:00
 #SBATCH --partition=all           # Change based on cluster
-#SBATCH --nodes=2                 # Number of nodes
-#SBATCH --ntasks-per-node=1       # One task per node
+#SBATCH --nodes=1                 # Number of nodes
+#SBATCH --ntasks-per-node=4       # One task per node
 #SBATCH --gres=gpu:4              # GPUs per node (adjust if needed)
-#SBATCH --mem=128G                # Memory per node
-#SBATCH --cpus-per-task=16        # CPU cores per task
+#SBATCH --mem=248G                # Memory per node
+#SBATCH --cpus-per-task=12        # CPU cores per task
 #SBATCH --constraint="3090|A5000"         # Request Specific GPUs (modify if needed)
 #SBATCH --output=./outputs/slurm_output_%A.out
 #SBATCH --exclude=ivi-cn005,ivi-cn009,ivi-cn010,ivi-cn011,ivi-cn012,ivi-cn001
@@ -26,12 +26,13 @@ conda activate prune_llm
 
 # Distributed Training Setup (if using DDP)
 export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
-export MASTER_PORT=29500
-GPUS_PER_NODE=${SLURM_GPUS_PER_TASK:-$SLURM_GPUS_ON_NODE}
-export WORLD_SIZE=$(( $SLURM_NTASKS * GPUS_PER_NODE ))
+export MASTER_PORT=$((15000 + RANDOM % 5000))  # Use random port
+export WORLD_SIZE=$SLURM_NTASKS
+export RANK=$SLURM_PROCID
+export LOCAL_RANK=$SLURM_LOCALID
 
 srun python ViT_adaptivity.py \
-    --exp_name ViT_Adaptivity_Freeze \
+    --exp_name ViT_Adaptivity_saveDebug \
     --model_name google/vit-base-patch16-224 \
     --pruning_type l1 \
     --pruning_ratio 0.25 \
@@ -42,14 +43,14 @@ srun python ViT_adaptivity.py \
     --save_as saves/state_dicts/ \
     --test_accuracy \
     --rebuild \
-    --epochs 100 \
+    --epochs 1 \
     --distributed --model-ema \
     --amp --ra-sampler \
     --log_wandb
 
 
 # CUDA_LAUNCH_BLOCKING=1 srun python ViT_adaptivity.py \
-#     --exp_name Freezing_Trial \
+#     --exp_name Freezing_Debug \
 #     --model_name google/vit-base-patch16-224 \
 #     --pruning_type l1 \
 #     --pruning_ratio 0.25 \
@@ -63,7 +64,6 @@ srun python ViT_adaptivity.py \
 #     --epochs 2 \
 #     --distributed --model-ema \
 #     --amp --ra-sampler \
-#     --wd 0 \
 #     --debug \
 
 echo "Job Complete"

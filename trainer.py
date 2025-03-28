@@ -83,18 +83,20 @@ def train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criteri
             if args.clip_grad_norm is not None:
                 # we should unscale the gradients of optimizer's assigned params if do gradient clipping
                 scaler.unscale_(optimizer)
-
-                # zero_out_gradients_v2(model.module, optimizer, in_freeze_indices, out_freeze_indices)
-                zero_out_gradients_v3(model.module, in_freeze_indices, out_freeze_indices)
                 nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
+
+            # zero_out_gradients_v2(model, optimizer, in_freeze_indices, out_freeze_indices)
+            zero_out_gradients_v3(model, in_freeze_indices, out_freeze_indices)
+            
             scaler.step(optimizer)
             scaler.update()
         
         else:
             loss.backward()
             # Use model.module to zero out grads in DDP training
-            # zero_out_gradients_v2(model.module, optimizer, in_freeze_indices, out_freeze_indices)
-            zero_out_gradients_v3(model.module, in_freeze_indices, out_freeze_indices) 
+            # zero_out_gradients_v2(model, optimizer, in_freeze_indices, out_freeze_indices)
+            zero_out_gradients_v3(model, in_freeze_indices, out_freeze_indices) 
+            
             if args.clip_grad_norm is not None:
                 nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
             optimizer.step()
@@ -156,7 +158,7 @@ def evaluate(model, criterion, data_loader, device, print_freq=100, log_suffix="
         metric_logger.synchronize_between_processes()
 
     print(f"{header} Acc@1 {metric_logger.acc1.global_avg:.3f} Acc@5 {metric_logger.acc5.global_avg:.3f}")
-    return metric_logger.acc1.global_avg
+    return metric_logger.acc1.global_avg, metric_logger.loss.global_avg
 
 
 def _get_cache_path(filepath):
@@ -258,15 +260,13 @@ def load_data(traindir, valdir, args):
     return dataset, dataset_test, train_sampler, test_sampler
 
 
-def fine_tuner(args, model, data_loader, data_loader_test, train_sampler, test_sampler, rebuild=False, in_freeze_indices=None, out_freeze_indices=None):
+def fine_tuner(args, device, model, data_loader, data_loader_test, train_sampler, test_sampler, rebuild=False, in_freeze_indices=None, out_freeze_indices=None):
     if args.output_dir:
         utils.mkdir(args.output_dir)
 
     # if args.distributed:
     #     utils.init_distributed_mode(args)
     # print(args)
-
-    device = torch.device(args.device)
 
     if args.use_deterministic_algorithms:
         torch.backends.cudnn.benchmark = False
@@ -339,7 +339,7 @@ def fine_tuner(args, model, data_loader, data_loader_test, train_sampler, test_s
             parameters, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, eps=0.0316, alpha=0.9
         )
     elif opt_name == "adam":
-        optimizer = torch.optim.Adam(parameters, lr=args.lr, weight_decay=args.weight_decay)
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     elif opt_name == "adamw":
         optimizer = torch.optim.AdamW(parameters, lr=args.lr, weight_decay=args.weight_decay)
     else:
@@ -416,9 +416,9 @@ def fine_tuner(args, model, data_loader, data_loader_test, train_sampler, test_s
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
         if model_ema:
-            evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA")
+            evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", dist=args.distributed)
         else:
-            evaluate(model, criterion, data_loader_test, device=device)
+            evaluate(model, criterion, data_loader_test, device=device, dist=args.distributed)
         return
 
     if args.log_wandb:
@@ -446,9 +446,9 @@ def fine_tuner(args, model, data_loader, data_loader_test, train_sampler, test_s
         else:
             metrics = train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler)
         
-        evaluate(model, criterion, data_loader_test, device=device, dist=args.distributed)
+        test_acc1 = evaluate(model, criterion, data_loader_test, device=device, dist=args.distributed)
         if model_ema:
-            evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA")
+            test_ema_acc1 = evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", dist=args.distributed)
         
         wandb_metrics = metrics.get_all_averages()
 
@@ -457,11 +457,15 @@ def fine_tuner(args, model, data_loader, data_loader_test, train_sampler, test_s
                 if utils.get_rank() == 0:
                     wandb.log({"epoch": epoch,
                                 **wandb_metrics,  # Spread all logged metrics
+                                "test_acc1": test_acc1,
+                                "test_ema_acc1": test_ema_acc1,
                             })
                     
             else:
                 wandb.log({"epoch": epoch,
                             **wandb_metrics,  # Spread all logged metrics
+                            "test_acc1": test_acc1,
+                            "test_ema_acc1": test_ema_acc1,
                         })
 
         lr_scheduler.step()
