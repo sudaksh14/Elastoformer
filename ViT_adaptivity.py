@@ -127,10 +127,12 @@ def get_args_parser(add_help=True):
         help="Only test the model",
         action="store_true",
     )
+
+    # Data augmentation parameters
     parser.add_argument("--auto-augment", default="ra", type=str, help="auto augment policy (default: None)")
     parser.add_argument("--ra-magnitude", default=9, type=int, help="magnitude of auto augment policy")
     parser.add_argument("--augmix-severity", default=3, type=int, help="severity of augmix policy")
-    parser.add_argument("--random-erase", default=0.0, type=float, help="random erasing probability (default: 0.0)")
+    parser.add_argument("--random-erase", default=0.25, type=float, help="random erasing probability (default: 0.0)")
 
     # Mixed precision training parameters
     parser.add_argument("--amp", action="store_true", help="Use torch.cuda.amp for mixed precision training")
@@ -200,6 +202,7 @@ def prepare_imagenet(imagenet_root, train_batch_size=64, val_batch_size=128, num
     random_erase_prob = getattr(args, "random_erase", 0.0)
     ra_magnitude = getattr(args, "ra_magnitude", None)
     augmix_severity = getattr(args, "augmix_severity", None)
+
     train_dst = ImageFolder(os.path.join(imagenet_root, 'train'),
                             transform=imgaug_presets.ClassificationPresetTrain(
                             crop_size=224,
@@ -224,12 +227,12 @@ def prepare_imagenet(imagenet_root, train_batch_size=64, val_batch_size=128, num
                             )
     )
 
-    if debug:
-        train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:500])
-        val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:100])
-    else:
-        train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:100000])
-        val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:10000])
+    # if debug:
+    #     train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:500])
+    #     val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:100])
+    # else:
+    #     train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:100000])
+    #     val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:10000])
 
     if args.distributed:    
         if hasattr(args, "ra_sampler") and args.ra_sampler:
@@ -652,7 +655,7 @@ def main(args):
         if args.test_accuracy:
             print("Base Loss: %.4f, Pruned Loss: %.4f, Rebuilt Loss: %.4f"%(loss_ori, loss_pruned, loss_rebuilt))
             print("Base Accuracy: %.4f, Pruned Accuracy: %.4f, Rebuilt Accuracy: %.4f"%(acc_ori, acc_pruned, acc_rebuilt))
-            plot_comparison(accuracy=[acc_ori, acc_pruned, acc_rebuilt], macs=[base_macs, pruned_macs, rebuilt_macs], pruning_ratio=args.pruning_ratio)
+            plot_comparison(accuracy=[acc_ori, acc_pruned, acc_rebuilt], macs=[base_macs, pruned_macs, rebuilt_macs], pruning_ratio=args.pruning_ratio, name=args.exp_name)
 
 
     

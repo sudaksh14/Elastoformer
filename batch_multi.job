@@ -43,7 +43,7 @@ srun python ViT_adaptivity.py \
     --save_as saves/state_dicts/ \
     --test_accuracy \
     --rebuild \
-    --epochs 1 \
+    --epochs 100 \
     --distributed --model-ema \
     --amp --ra-sampler \
     --log_wandb
