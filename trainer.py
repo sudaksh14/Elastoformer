@@ -16,7 +16,7 @@ from torch import nn
 from torch.utils.data.dataloader import default_collate
 from torchvision.transforms.functional import InterpolationMode
 from aug_transforms import get_mixup_cutmix
-from prune_utils import zero_out_gradients, zero_out_gradients_v2, zero_out_gradients_v3
+from prune_utils import zero_out_gradients, zero_out_gradients_v2, zero_out_gradients_v3, selective_gradient_clipping_norm
 
 
 def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None):
@@ -29,7 +29,7 @@ def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, arg
     for i, (image, target) in enumerate(metric_logger.log_every(data_loader, args.print_freq, header)):
         start_time = time.time()
         image, target = image.to(device), target.to(device)
-        with torch.cuda.amp.autocast(enabled=scaler is not None):
+        with torch.autocast(device_type="cuda", enabled=scaler is not None):
             output = model(image).logits
             loss = criterion(output, target)
 
@@ -73,7 +73,7 @@ def train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criteri
     for i, (image, target) in enumerate(metric_logger.log_every(data_loader, args.print_freq, header)):
         start_time = time.time()
         image, target = image.to(device), target.to(device)
-        with torch.cuda.amp.autocast(enabled=scaler is not None):
+        with torch.autocast(device_type="cuda", enabled=scaler is not None):
             output = model(image).logits
             loss = criterion(output, target)
 
@@ -83,22 +83,21 @@ def train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criteri
             if args.clip_grad_norm is not None:
                 # we should unscale the gradients of optimizer's assigned params if do gradient clipping
                 scaler.unscale_(optimizer)
-                nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
+                selective_gradient_clipping_norm(model, out_freeze_indices, in_freeze_indices, args.clip_grad_norm, device)
 
             # zero_out_gradients_v2(model, optimizer, in_freeze_indices, out_freeze_indices)
-            zero_out_gradients_v3(model, in_freeze_indices, out_freeze_indices)
+            # zero_out_gradients_v3(model, in_freeze_indices, out_freeze_indices)
             
             scaler.step(optimizer)
             scaler.update()
         
         else:
             loss.backward()
-            # Use model.module to zero out grads in DDP training
             # zero_out_gradients_v2(model, optimizer, in_freeze_indices, out_freeze_indices)
-            zero_out_gradients_v3(model, in_freeze_indices, out_freeze_indices) 
+            # zero_out_gradients_v3(model, in_freeze_indices, out_freeze_indices) 
             
             if args.clip_grad_norm is not None:
-                nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
+                selective_gradient_clipping_norm(model, out_freeze_indices, in_freeze_indices, args.clip_grad_norm, device)
             optimizer.step()
 
         if model_ema and i % args.model_ema_steps == 0:
@@ -345,7 +344,7 @@ def fine_tuner(args, device, model, data_loader, data_loader_test, train_sampler
     else:
         raise RuntimeError(f"Invalid optimizer {args.opt}. Only SGD, RMSprop, Adam and AdamW are supported.")
 
-    scaler = torch.cuda.amp.GradScaler() if args.amp else None
+    scaler = torch.amp.GradScaler('cuda') if args.amp else None
 
     args.lr_scheduler = args.lr_scheduler.lower()
     if args.lr_scheduler == "steplr":
@@ -446,9 +445,9 @@ def fine_tuner(args, device, model, data_loader, data_loader_test, train_sampler
         else:
             metrics = train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler)
         
-        test_acc1 = evaluate(model, criterion, data_loader_test, device=device, dist=args.distributed)
+        test_acc1,_ = evaluate(model, criterion, data_loader_test, device=device, dist=args.distributed)
         if model_ema:
-            test_ema_acc1 = evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", dist=args.distributed)
+            test_ema_acc1,_ = evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", dist=args.distributed)
         
         wandb_metrics = metrics.get_all_averages()
 

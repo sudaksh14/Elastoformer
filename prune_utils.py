@@ -900,6 +900,104 @@ def change_module_name(pruning_dict):
 
     return new_dict
 
+
+def selective_gradient_clipping_norm(model, exclude_indices_dim0, exclude_indices_dim1, max_norm, device='cuda' if torch.cuda.is_available() else 'cpu'):
+    """
+    Clips gradients selectively while excluding certain indices from clipping.
+
+    Args:
+        model (nn.Module): The model whose gradients will be clipped.
+        exclude_indices_dim0 (dict): Dictionary mapping layer names to indices in dim 0 to exclude from clipping.
+        exclude_indices_dim1 (dict): Dictionary mapping layer names to indices in dim 1 to exclude from clipping.
+        max_norm (float): The maximum norm for gradient clipping.
+        device (str): The device on which the model is running.
+    """
+
+    # Dictionary to store original gradients
+    original_weight_grads, original_bias_grads = {}, {}
+
+    for layer_name, layer in model.named_modules():
+        if not isinstance(layer, (nn.Linear, nn.LayerNorm, nn.Conv2d)):
+            continue
+
+        if layer.weight.grad is None:
+            print(f"Warning: Layer '{layer_name}' does not have gradients.")
+            continue
+
+        if 'classifier' in layer_name:
+            continue
+
+        # Check if layer needs selective clipping
+        exclude_dim0 = exclude_indices_dim0.get(layer_name, None)
+        exclude_dim1 = exclude_indices_dim1.get(layer_name, None)
+
+        if exclude_dim0 is not None:
+            exclude_dim0 = torch.tensor(exclude_dim0, dtype=torch.long, device=device)
+            exclude_dim0 = exclude_dim0[exclude_dim0 < layer.weight.grad.shape[0]]  # Ensure valid indices
+
+        if exclude_dim1 is not None:
+            exclude_dim1 = torch.tensor(exclude_dim1, dtype=torch.long, device=device)
+            exclude_dim1 = exclude_dim1[exclude_dim1 < layer.weight.grad.shape[1]]  # Ensure valid indices
+
+        # Store original gradients before clipping
+        with torch.no_grad():
+            if isinstance(layer, nn.Linear) and exclude_dim0 is not None and exclude_dim1 is not None:
+                original_weight_grads[layer_name] = layer.weight.grad[exclude_dim0[:, None], exclude_dim1].clone()
+                if layer.bias is not None:
+                    original_bias_grads[layer_name] = layer.bias.grad[exclude_dim0].clone()
+
+            elif isinstance(layer, (nn.LayerNorm, nn.Conv2d)) and exclude_dim0 is not None:
+                original_weight_grads[layer_name] = layer.weight.grad[exclude_dim0].clone()
+                if layer.bias is not None:
+                    original_bias_grads[layer_name] = layer.bias.grad[exclude_dim0].clone()
+
+    # sample_layer = 'vit.encoder.layer.11.output.dense'
+
+    # print("Layer Name:", sample_layer)
+    # print("Before clipping")
+    # for layer_name, layer in model.named_modules():
+    #     if layer_name == sample_layer:
+    #         print(layer.weight.grad.shape)
+    #         exclude_dim0 = torch.tensor(exclude_indices_dim0.get(layer_name, None), dtype=torch.long, device=device)
+    #         exclude_dim1 = torch.tensor(exclude_indices_dim1.get(layer_name, None), dtype=torch.long, device=device)
+    #         print(layer.weight.grad[exclude_dim0[:, None], exclude_dim1].shape)
+    #         print(original_weight_grads[layer_name].shape)
+    #         print(layer.weight.grad[exclude_dim0[:, None], exclude_dim1] == original_weight_grads[layer_name])
+    #         print(layer.weight.grad[exclude_dim0[:, None], exclude_dim1].sum())
+    #         print(original_weight_grads[layer_name].sum())
+    #         print(layer.weight.grad[exclude_dim0[:, None], exclude_dim1].sum() == original_weight_grads[layer_name].sum())
+    
+
+    # Apply global gradient clipping
+    nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+
+    # Restore excluded gradients
+    with torch.no_grad():
+        for layer_name, layer in model.named_modules():
+            if not isinstance(layer, (nn.Linear, nn.LayerNorm, nn.Conv2d)) or layer.weight.grad is None:
+                continue
+
+            exclude_dim0 = exclude_indices_dim0.get(layer_name, None)
+            exclude_dim1 = exclude_indices_dim1.get(layer_name, None)
+
+            if exclude_dim0 is not None:
+                exclude_dim0 = torch.tensor(exclude_dim0, dtype=torch.long, device=device)
+
+            if exclude_dim1 is not None:
+                exclude_dim1 = torch.tensor(exclude_dim1, dtype=torch.long, device=device)
+
+            if layer_name in original_weight_grads:
+                if isinstance(layer, nn.Linear) and exclude_dim0 is not None and exclude_dim1 is not None:
+                    layer.weight.grad[exclude_dim0[:, None], exclude_dim1] = original_weight_grads[layer_name]
+
+                elif isinstance(layer, (nn.LayerNorm, nn.Conv2d)) and exclude_dim0 is not None:
+                    layer.weight.grad[exclude_dim0] = original_weight_grads[layer_name]
+
+            if layer_name in original_bias_grads and layer.bias is not None:
+                layer.bias.grad[exclude_dim0] = original_bias_grads[layer_name]
+
+
+
 def plot_comparison(accuracy, macs, pruning_ratio, name=None):
 
     # Data (replace with your values)

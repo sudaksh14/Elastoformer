@@ -227,12 +227,12 @@ def prepare_imagenet(imagenet_root, train_batch_size=64, val_batch_size=128, num
                             )
     )
 
-    # if debug:
-    #     train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:500])
-    #     val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:100])
-    # else:
-    #     train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:100000])
-    #     val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:10000])
+    if debug:
+        train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:500])
+        val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:100])
+    else:
+        train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:100000])
+        val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:10000])
 
     if args.distributed:    
         if hasattr(args, "ra_sampler") and args.ra_sampler:
@@ -634,8 +634,8 @@ def main(args):
         # partial freezing of grads for freezing the core weights
         freeze_partial_weights(rebuilt_model, pruned_index_in, pruned_index_out, device)
 
-        fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler)
-        # fine_tuner(args, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler, rebuild=True, in_freeze_indices=pruned_index_in, out_freeze_indices=pruned_index_out)
+        # fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler)
+        fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler, rebuild=True, in_freeze_indices=pruned_index_in, out_freeze_indices=pruned_index_out)
 
         
         if args.test_accuracy:

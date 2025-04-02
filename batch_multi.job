@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:4              # GPUs per node (adjust if needed)
 #SBATCH --mem=248G                # Memory per node
 #SBATCH --cpus-per-task=12        # CPU cores per task
-#SBATCH --constraint="3090|A5000"         # Request Specific GPUs (modify if needed)
+#SBATCH --constraint="3090|A5000|titan_rtx"         # Request Specific GPUs (modify if needed)
 #SBATCH --output=./outputs/slurm_output_%A.out
 #SBATCH --exclude=ivi-cn005,ivi-cn009,ivi-cn010,ivi-cn011,ivi-cn012,ivi-cn001
 #SBATCH --export=ALL,WANDB_API_KEY=dfcd2574507b9ebe69ca13ab6f6925d864e82ee0
@@ -32,20 +32,20 @@ export RANK=$SLURM_PROCID
 export LOCAL_RANK=$SLURM_LOCALID
 
 srun python ViT_adaptivity.py \
-    --exp_name ViT_Adaptivity_saveDebug \
+    --exp_name ViT_Adaptivity_selective_clipping \
     --model_name google/vit-base-patch16-224 \
     --pruning_type l1 \
     --pruning_ratio 0.25 \
     --taylor_batchs 10 \
     --data_path /ssdstore/ImageNet/ \
-    --train_batch_size 128 \
+    --train_batch_size 64 \
     --val_batch_size 128 \
     --save_as saves/state_dicts/ \
     --test_accuracy \
     --rebuild \
-    --epochs 100 \
+    --epochs 50 \
     --distributed --model-ema \
-    --amp --ra-sampler \
+    --clip-grad-norm 1 --amp --ra-sampler \
     --log_wandb
 
 
