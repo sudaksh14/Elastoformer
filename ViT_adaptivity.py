@@ -230,9 +230,9 @@ def prepare_imagenet(imagenet_root, train_batch_size=64, val_batch_size=128, num
     if debug:
         train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:500])
         val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:100])
-    else:
-        train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:100000])
-        val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:10000])
+    # else:
+    #     train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:100000])
+    #     val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:10000])
 
     if args.distributed:    
         if hasattr(args, "ra_sampler") and args.ra_sampler:
@@ -583,10 +583,10 @@ def main(args):
         for key, value in pruned_weights.items():
             file.write(f"  {key}: {value}\n")
 
-    non_pruned_weights = extract_vit_weight_subset(orig_copy, non_pruned_index_out, non_pruned_index_in)
-    with open(f"./saves/pruning_metadata/non_pruned_ViT_weights.txt", "w") as file:
-        for key, value in non_pruned_weights.items():
-            file.write(f"  {key}: {value}\n")
+    # non_pruned_weights = extract_vit_weight_subset(orig_copy, non_pruned_index_out, non_pruned_index_in)
+    # with open(f"./saves/pruning_metadata/non_pruned_ViT_weights.txt", "w") as file:
+    #     for key, value in non_pruned_weights.items():
+    #         file.write(f"  {key}: {value}\n")
 
     # Modify the attention head size and all head size after pruning
     for id, m in enumerate(model.modules()):
@@ -601,6 +601,11 @@ def main(args):
 
     # Fine-Tune the pruned model
     fine_tuner(args, device, model, train_loader, val_loader, train_sampler, val_sampler)
+
+    non_pruned_weights = extract_vit_core_weights(model)
+    with open(f"./saves/pruning_metadata/non_pruned_ViT_weights.txt", "w") as file:
+        for key, value in non_pruned_weights.items():
+            file.write(f"  {key}: {value}\n")
 
     if args.test_accuracy:
         print("Testing accuracy of the pruned model...")
@@ -632,10 +637,37 @@ def main(args):
         rebuilt_model = update_vit_weights(rebuilt_model, [pruned_index_in, pruned_index_out], [non_pruned_index_in, non_pruned_index_out], pruned_weights, non_pruned_weights).to(device)
         
         # partial freezing of grads for freezing the core weights
-        freeze_partial_weights(rebuilt_model, pruned_index_in, pruned_index_out, device)
+        freeze_partial_weights(rebuilt_model, non_pruned_index_in, non_pruned_index_out, device)
+
+        # sample_layer = 'vit.encoder.layer.11.output.dense'
+
+        # print("Layer Name:", sample_layer)
+        # print("Before Fine-Tune")
+        # for layer_name, layer in rebuilt_model.named_modules():
+        #     if layer_name == sample_layer:
+        #         print(layer.weight.shape)
+        #         exclude_dim0 = torch.tensor(non_pruned_index_out.get(layer_name, None), dtype=torch.long, device=device)
+        #         exclude_dim1 = torch.tensor(non_pruned_index_in.get(layer_name, None), dtype=torch.long, device=device)
+        #         print(layer.weight[exclude_dim0[:, None], exclude_dim1].shape)
+        #         print(layer.weight[exclude_dim0[:, None], exclude_dim1].sum())
+        #         print(model.state_dict()[f"{layer_name}.weight"].sum())
+        #         print(layer.weight[exclude_dim0[:, None], exclude_dim1] == model.state_dict()[f"{layer_name}.weight"].to(device))
+
 
         # fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler)
-        fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler, rebuild=True, in_freeze_indices=pruned_index_in, out_freeze_indices=pruned_index_out)
+        fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler, rebuild=True, in_freeze_indices=non_pruned_index_in, out_freeze_indices=non_pruned_index_out)
+
+        # print("Layer Name:", sample_layer)
+        # print("After Fine-Tune")
+        # for layer_name, layer in rebuilt_model.named_modules():
+        #     if layer_name == sample_layer:
+        #         print(layer.weight.shape)
+        #         exclude_dim0 = torch.tensor(non_pruned_index_out.get(layer_name, None), dtype=torch.long, device=device)
+        #         exclude_dim1 = torch.tensor(non_pruned_index_in.get(layer_name, None), dtype=torch.long, device=device)
+        #         print(layer.weight[exclude_dim0[:, None], exclude_dim1].shape)
+        #         print(layer.weight[exclude_dim0[:, None], exclude_dim1].sum())
+        #         print(model.state_dict()[f"{layer_name}.weight"].sum())
+        #         print(layer.weight[exclude_dim0[:, None], exclude_dim1] == model.state_dict()[f"{layer_name}.weight"].to(device))
 
         
         if args.test_accuracy:

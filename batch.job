@@ -22,22 +22,22 @@ nvidia-smi
 eval "$(conda shell.bash hook)"
 conda activate prune_llm
 
-# srun python compare_tensor.py
+srun python compare_tensor.py
 
-srun python ViT_adaptivity.py \
-    --exp_name ViT_Adaptivity_Freeze_AdamW \
-    --model_name google/vit-base-patch16-224 \
-    --pruning_type l1 \
-    --pruning_ratio 0.25 \
-    --taylor_batchs 10 \
-    --data_path /ssdstore/ImageNet/ \
-    --train_batch_size 64 \
-    --val_batch_size 64 \
-    --test_accuracy \
-    --rebuild \
-    --epochs 1 \
-    --clip-grad-norm 1 --amp --ra-sampler \
-    --debug \
+# srun python ViT_adaptivity.py \
+#     --exp_name ViT_Adaptivity_selective_clipping \
+#     --model_name google/vit-base-patch16-224 \
+#     --pruning_type l1 \
+#     --pruning_ratio 0.25 \
+#     --taylor_batchs 10 \
+#     --data_path /ssdstore/ImageNet/ \
+#     --train_batch_size 64 \
+#     --val_batch_size 64 \
+#     --test_accuracy \
+#     --rebuild \
+#     --epochs 1 \
+#     --clip-grad-norm 1 --amp --ra-sampler \
+#     --debug \
 
 
 echo "Job Complete"

@@ -570,6 +570,70 @@ def extract_vit_weight_subset(model, out_indices_dict, in_indices_dict):
     return selected_weights
             
 
+def extract_vit_core_weights(model):
+    """
+    Extracts weights from the core Vision Transformer model based on specified output and input indices.
+
+    Args:
+        model (torch.nn.Module): The ViT model.
+        out_indices_dict (dict): Dictionary with layer names as keys and lists of output indices as values.
+        in_indices_dict (dict): Dictionary with layer names as keys and lists of input indices as values.
+
+    Returns:
+        dict: Dictionary storing the selected weights for each layer.
+    """
+    selected_weights = {}
+
+    for layer_name, layer in model.named_modules():
+
+        if "classifier" in layer_name:
+            weight = layer.weight  # Shape: (out_dim, in_dim)
+            bias = layer.bias if layer.bias is not None else None
+
+            selected_weight = weight
+
+            # Store subset
+            selected_weights[layer_name] = {
+                "Weight": selected_weight.detach().cpu().numpy(),
+                "Bias": bias.detach().cpu().numpy() if bias is not None else None
+            }
+
+        elif isinstance(layer, torch.nn.Conv2d):
+            weight = layer.weight
+            bias = layer.bias if layer.bias is not None else None
+
+            # Store subset
+            selected_weights[layer_name] = {
+                "Weight": weight.detach().cpu().numpy(),
+                "Bias": bias.detach().cpu().numpy() if bias is not None else None
+            }
+
+        elif isinstance(layer, torch.nn.Linear):
+            weight = layer.weight  # Shape: (out_dim, in_dim)
+            bias = layer.bias if layer.bias is not None else None
+
+            # Select subset of weights
+            selected_weight = weight
+
+            # Store results
+            selected_weights[layer_name] = {
+                "Weight": selected_weight.detach().cpu().numpy(),
+                "Bias": bias.detach().cpu().numpy() if bias is not None else None
+            }
+
+        elif isinstance(layer, torch.nn.LayerNorm):
+            weight = layer.weight  # Shape: (dim,)
+            bias = layer.bias  # Shape: (dim,)
+
+            selected_weights[layer_name] = {
+                "Weight": weight.detach().cpu().numpy(),
+                "Bias": bias.detach().cpu().numpy() if bias is not None else None
+            }
+
+    print("Core weights extracted successfully")
+
+    return selected_weights
+
 def get_unpruned_indices(total_idxs, pruned_idxs, dim="out"):
 
     if isinstance(total_idxs, int):
@@ -952,7 +1016,6 @@ def selective_gradient_clipping_norm(model, exclude_indices_dim0, exclude_indice
                     original_bias_grads[layer_name] = layer.bias.grad[exclude_dim0].clone()
 
     # sample_layer = 'vit.encoder.layer.11.output.dense'
-
     # print("Layer Name:", sample_layer)
     # print("Before clipping")
     # for layer_name, layer in model.named_modules():
@@ -966,10 +1029,22 @@ def selective_gradient_clipping_norm(model, exclude_indices_dim0, exclude_indice
     #         print(layer.weight.grad[exclude_dim0[:, None], exclude_dim1].sum())
     #         print(original_weight_grads[layer_name].sum())
     #         print(layer.weight.grad[exclude_dim0[:, None], exclude_dim1].sum() == original_weight_grads[layer_name].sum())
-    
 
     # Apply global gradient clipping
     nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+
+    # print("After clipping")
+    # for layer_name, layer in model.named_modules():
+    #     if layer_name == sample_layer:
+    #         print(layer.weight.grad.shape)
+    #         exclude_dim0 = torch.tensor(exclude_indices_dim0.get(layer_name, None), dtype=torch.long, device=device)
+    #         exclude_dim1 = torch.tensor(exclude_indices_dim1.get(layer_name, None), dtype=torch.long, device=device)
+    #         print(layer.weight.grad[exclude_dim0[:, None], exclude_dim1].shape)
+    #         print(original_weight_grads[layer_name].shape)
+    #         print(layer.weight.grad[exclude_dim0[:, None], exclude_dim1] == original_weight_grads[layer_name])
+    #         print(layer.weight.grad[exclude_dim0[:, None], exclude_dim1].sum())
+    #         print(original_weight_grads[layer_name].sum())
+    #         print(layer.weight.grad[exclude_dim0[:, None], exclude_dim1].sum() == original_weight_grads[layer_name].sum())
 
     # Restore excluded gradients
     with torch.no_grad():
@@ -995,6 +1070,19 @@ def selective_gradient_clipping_norm(model, exclude_indices_dim0, exclude_indice
 
             if layer_name in original_bias_grads and layer.bias is not None:
                 layer.bias.grad[exclude_dim0] = original_bias_grads[layer_name]
+
+    # print("After restoring")
+    # for layer_name, layer in model.named_modules():
+    #     if layer_name == sample_layer:
+    #         print(layer.weight.grad.shape)
+    #         exclude_dim0 = torch.tensor(exclude_indices_dim0.get(layer_name, None), dtype=torch.long, device=device)
+    #         exclude_dim1 = torch.tensor(exclude_indices_dim1.get(layer_name, None), dtype=torch.long, device=device)
+    #         print(layer.weight.grad[exclude_dim0[:, None], exclude_dim1].shape)
+    #         print(original_weight_grads[layer_name].shape)
+    #         print(layer.weight.grad[exclude_dim0[:, None], exclude_dim1] == original_weight_grads[layer_name])
+    #         print(layer.weight.grad[exclude_dim0[:, None], exclude_dim1].sum())
+    #         print(original_weight_grads[layer_name].sum())
+    #         print(layer.weight.grad[exclude_dim0[:, None], exclude_dim1].sum() == original_weight_grads[layer_name].sum())
 
 
 

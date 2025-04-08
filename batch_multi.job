@@ -32,13 +32,13 @@ export RANK=$SLURM_PROCID
 export LOCAL_RANK=$SLURM_LOCALID
 
 srun python ViT_adaptivity.py \
-    --exp_name ViT_Adaptivity_selective_clipping \
+    --exp_name ViT_Adaptivity_selective_clipping_full_data \
     --model_name google/vit-base-patch16-224 \
     --pruning_type l1 \
     --pruning_ratio 0.25 \
     --taylor_batchs 10 \
     --data_path /ssdstore/ImageNet/ \
-    --train_batch_size 64 \
+    --train_batch_size 128 \
     --val_batch_size 128 \
     --save_as saves/state_dicts/ \
     --test_accuracy \
@@ -63,7 +63,7 @@ srun python ViT_adaptivity.py \
 #     --rebuild \
 #     --epochs 2 \
 #     --distributed --model-ema \
-#     --amp --ra-sampler \
+#     --clip-grad-norm 1 --amp --ra-sampler \
 #     --debug \
 
 echo "Job Complete"
