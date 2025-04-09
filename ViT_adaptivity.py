@@ -227,10 +227,10 @@ def prepare_imagenet(imagenet_root, train_batch_size=64, val_batch_size=128, num
                             )
     )
 
-    if debug:
-        train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:500])
-        val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:100])
-    # else:
+    # if debug:
+    #     train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:500])
+    #     val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:100])
+    # # else:
     #     train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:100000])
     #     val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:10000])
 
@@ -696,5 +696,4 @@ def main(args):
 if __name__ == '__main__':
     args = get_args_parser().parse_args()
     main(args)
-
     # compare_performance(args)
