@@ -18,8 +18,6 @@ echo "Node name: $(hostname)"
 echo -n memory=; ulimit -m
 echo -n nproc=; nproc
 
-nvidia-smi
-
 # Initialize Conda and activate environment
 eval "$(conda shell.bash hook)"
 conda activate prune_llm
@@ -31,8 +29,10 @@ export WORLD_SIZE=$SLURM_NTASKS
 export RANK=$SLURM_PROCID
 export LOCAL_RANK=$SLURM_LOCALID
 
+nvidia-smi
+
 srun python ViT_adaptivity.py \
-    --exp_name ViT_Adaptivity_selective_clipping_full_data \
+    --exp_name ViT_Adaptivity_selective_clipping_100k \
     --model_name google/vit-base-patch16-224 \
     --pruning_type l1 \
     --pruning_ratio 0.25 \

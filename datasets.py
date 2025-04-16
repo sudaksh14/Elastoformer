@@ -11,6 +11,7 @@ from torchvision import datasets, transforms
 from timm.data.constants import \
     IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, IMAGENET_INCEPTION_MEAN, IMAGENET_INCEPTION_STD
 from timm.data import create_transform
+from fastdownload import FastDownload
 
 
 train_path = "/home/dkoelma1/VisualSearch/Imagenet_train.tar"
@@ -99,3 +100,45 @@ def build_transform(is_train, args):
     t.append(transforms.ToTensor())
     t.append(transforms.Normalize(mean, std))
     return transforms.Compose(t)
+
+
+def download_datasets(dataset_name, root_dir="../Datasets"):
+    os.makedirs(root_dir, exist_ok=True)
+    
+    transform = transforms.ToTensor()
+
+    if dataset_name.lower() == "cifar10":
+        datasets.CIFAR10(root=root_dir, train=True, download=True, transform=transform)
+        datasets.CIFAR10(root=root_dir, train=False, download=True, transform=transform)
+        print("CIFAR-10 downloaded.")
+    
+    elif dataset_name.lower() == "cifar100":
+        datasets.CIFAR100(root=root_dir, train=True, download=True, transform=transform)
+        datasets.CIFAR100(root=root_dir, train=False, download=True, transform=transform)
+        print("CIFAR-100 downloaded.")
+
+    elif dataset_name.lower() == "tiny_imagenet":
+        url = "http://cs231n.stanford.edu/tiny-imagenet-200.zip"
+        target_path = os.path.join(root_dir, "tiny-imagenet-200.zip")
+        if not os.path.exists(target_path):
+            import urllib.request, zipfile
+            print("Downloading Tiny ImageNet...")
+            urllib.request.urlretrieve(url, target_path)
+            with zipfile.ZipFile(target_path, 'r') as zip_ref:
+                zip_ref.extractall(root_dir)
+            print("Tiny ImageNet downloaded and extracted.")
+        else:
+            print("Tiny ImageNet already exists.")
+
+    elif dataset_name.lower() == "imagenette":
+        fd = FastDownload(base=root_dir)
+        url = 'https://s3.amazonaws.com/fast-ai-imageclas/imagenette2-160.tgz'  # 160px version
+        path = fd.get(url)
+        print(f"Imagenette downloaded at: {path}")
+
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name}")
+
+
+if __name__ == '__main__':
+    download_datasets("imagenette")

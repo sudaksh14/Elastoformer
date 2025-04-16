@@ -38,12 +38,15 @@ def get_args_parser(add_help=True):
     parser.add_argument('--data_path', default='data/imagenet', type=str, help='model name')
     parser.add_argument('--taylor_batchs', default=10, type=int, help='number of batchs for taylor criterion')
     parser.add_argument('--pruning_ratio', default=0.5, type=float, help='prune ratio')
+    parser.add_argument('--iterative', default=False, action='store_true', help='True for Iterative Pruning')
+    parser.add_argument('--pruning_steps', default=1, type=int, help='number of Prune steps/Adaptive modes')
     parser.add_argument('--bottleneck', default=False, action='store_true', help='bottleneck or uniform')
     parser.add_argument('--pruning_type', default='l1', type=str, help='pruning type', choices=['random', 'taylor', 'l1'])
     parser.add_argument('--test_accuracy', default=False, action='store_true', help='test accuracy')
-    parser.add_argument('--global_pruning', default=False, action='store_true', help='global pruning')
+    parser.add_argument('--global_pruning', default=False, action='store_true', help='enables global pruning(global_compression = 1-pruning_ratio)')
+    parser.add_argument('--isomorphic', default=False, action='store_true', help='enables isomorphic pruning ECCV 2024, https://arxiv.org/abs/2407.04616, overides global_pruning')
     parser.add_argument('--rebuild', default=False, action='store_true', help='Rebuilding for adaptivity')
-
+    
     parser.add_argument('--train_batch_size', default=128, type=int, help='train batch size')
     parser.add_argument('--val_batch_size', default=128, type=int, help='val batch size')
     parser.add_argument('--save_as', default=None, type=str, help='save as')
@@ -188,15 +191,6 @@ def prepare_imagenet(imagenet_root, train_batch_size=64, val_batch_size=128, num
     """
 
     print('Parsing dataset...')
-    # train_dst = ImageFolder(os.path.join(imagenet_root, 'train'), 
-    #                         transform=imgaug_presets.ClassificationPresetEval(
-    #                             mean=[0.485, 0.456, 0.406] if use_imagenet_mean_std else [0.5, 0.5, 0.5],
-    #                             std=[0.229, 0.224, 0.225] if use_imagenet_mean_std else [0.5, 0.5, 0.5],
-    #                             crop_size=224,
-    #                             resize_size=256,
-    #                             interpolation=InterpolationMode.BILINEAR,
-    #                         )
-    # )
 
     auto_augment_policy = getattr(args, "auto_augment", None)
     random_erase_prob = getattr(args, "random_erase", 0.0)
@@ -230,7 +224,7 @@ def prepare_imagenet(imagenet_root, train_batch_size=64, val_batch_size=128, num
     if debug:
         train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:500])
         val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:100])
-    else:
+    # else:
         train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:100000])
         val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:10000])
 
@@ -320,12 +314,12 @@ def create_vit_general(img_size=(224,224), patch_size=(16,16), in_channels=3, em
     """
 
     if dim_dict is not None:
-        embed_dim = dim_dict['vit.embeddings.patch_embeddings.projection.weight']
-        num_layers = max(int(key.split(".")[3]) for key in dim_dict if key.startswith("vit.encoder.layer")) + 1
+        embed_dim = dim_dict["Embed_Dim"]
+        num_layers = dim_dict["num_layers"]
         num_heads = dim_dict['num_heads']
-        ff_hidden_dim = dim_dict['vit.encoder.layer.0.intermediate.dense.weight'][0]
+        ff_hidden_dim = dim_dict["FFN_Intermediate_Dim"]
         qkv_dim = embed_dim
-        output_dim = dim_dict['vit.encoder.layer.0.output.dense.weight'][0]
+        output_dim = dim_dict["FFN_Output_Dim"]
 
     config = ViTConfig(
         image_size=img_size,
@@ -386,6 +380,37 @@ def compare_performance(args):
     plot_comparison(accuracy=[orig_acc, pruned_acc, rebuilt_acc], macs=[base_macs, pruned_macs, rebuilt_macs], pruning_ratio=args.pruning_ratio)
     print("Plotting Complete")
 
+def prepare_imagenette(path="../Datasets/data/imagenette2-160", train_batch_size=64, val_batch_size=64, num_workers=4, use_imagenet_mean_std=True, debug=False):
+    
+    print('Parsing Imagenette dataset...')
+
+    train_transforms = T.Compose([
+    T.RandomResizedCrop(224),
+    T.RandomHorizontalFlip(),
+    T.ToTensor(),
+    T.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
+    ])
+
+    val_transforms = T.Compose([
+        T.Resize(256),
+        T.CenterCrop(224),
+        T.ToTensor(),
+        T.Normalize(mean=[0.485, 0.456, 0.406],
+                            std=[0.229, 0.224, 0.225])
+    ])
+
+    train_dir = os.path.join(path, 'train')
+    val_dir = os.path.join(path, 'val')
+
+    train_dataset = ImageFolder(root=train_dir, transform=train_transforms)
+    val_dataset = ImageFolder(root=val_dir, transform=val_transforms)
+
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
+    print(train_dataset.classes)
+
+    return train_loader, val_loader, None, None
 
 
 def main(args):
@@ -412,21 +437,12 @@ def main(args):
     else: raise NotImplementedError
 
     if args.pruning_type=='taylor' or args.test_accuracy:
-        train_loader, val_loader, train_sampler, val_sampler = prepare_imagenet(args.data_path, train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size, debug=args.debug)
-
+        # train_loader, val_loader, train_sampler, val_sampler = prepare_imagenet(args.data_path, train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size, debug=args.debug)
+        train_loader, val_loader, train_sampler, val_sampler = prepare_imagenette()
 
     # Load the model
     model = ViTForImageClassification.from_pretrained(args.model_name).to(device)
-    # model = create_vit_general().to(device)
-    # model = models.resnet18(pretrained=True).to(device)
     orig_copy = deepcopy(model)
-    # torch.onnx.export(model, (example_inputs,), f=f"./saves/onnx/ViT_b_16.onnx")
-    # for name, layer in model.named_parameters():
-    #     if layer.requires_grad:
-    #         print(name)
-    #         print(type(layer))
-    # exit()
-
 
     orig_statedict = orig_copy.state_dict()
     orig_dimensions = get_layer_size(orig_statedict)
@@ -434,8 +450,6 @@ def main(args):
 
     base_macs, base_params = tp.utils.count_ops_and_params(model, example_inputs)
     print(f"Orig MAC's: {base_macs/1e9:.2f} G, Orig Params: {base_params/1e6:.2f} M")
-
-    # visualize_weight_matrix(model, "vit.encoder.layer.0.attention.attention.query.weight", plot_name="original")
 
     if args.test_accuracy:
         criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
@@ -458,27 +472,13 @@ def main(args):
         if args.bottleneck and isinstance(m, ViTSelfOutput):
             ignored_layers.append(m.dense) # only prune the internal layers of FFN & Attention
                 
-    
-    # pruner = tp.pruner.MetaPruner(
-    #             model, 
-    #             example_inputs, 
-    #             global_pruning=args.global_pruning, # If False, a uniform pruning ratio will be assigned to different layers.
-    #             importance=imp, # importance criterion for parameter selection
-    #             pruning_ratio=args.pruning_ratio, # target pruning ratio
-    #             ignored_layers=ignored_layers,
-    #             round_to=1,
-    #             num_heads=num_heads,
-    #             prune_head_dims=True,
-    #             prune_num_heads=False,                 # Removes entire heads (Contigous columns of indices)
-    #             head_pruning_ratio=args.pruning_ratio, # disabled when prune_num_heads=False
-    #             output_transform=lambda out: out.logits.sum() # Transform to convert logits to scalar
-    # )
-
     pruner = tp.pruner.BasePruner(
                 model, 
-                example_inputs, 
+                example_inputs,
+                isomorphic=args.isomorphic, 
                 global_pruning=args.global_pruning, # If False, a uniform pruning ratio will be assigned to different layers.
                 importance=imp, # importance criterion for parameter selection
+                iterative_steps=args.pruning_steps, # number of pruning steps
                 pruning_ratio=args.pruning_ratio, # target pruning ratio
                 ignored_layers=ignored_layers,
                 round_to=1,
@@ -507,86 +507,173 @@ def main(args):
                     loss = torch.nn.functional.cross_entropy(output, lbls)
                     loss.backward()
 
-    pruned_index_out = {}
-    pruned_index_in = {}
+    # Pruning Metadata for Rebuilding
+    pruned_index_out = [{} for _ in range(args.pruning_steps)]
+    pruned_index_in = [{} for _ in range(args.pruning_steps)]
 
-    non_pruned_index_out = {}
-    non_pruned_index_in = {}
+    non_pruned_index_out = [{} for _ in range(args.pruning_steps)]
+    non_pruned_index_in = [{} for _ in range(args.pruning_steps)]
 
-    for grp in pruner.step(interactive=True):
-        # print(grp)
-        # print("======================================")
+    pruned_weights_recorder = {}
+    non_pruned_weights_recorder = {}
 
-        for g in grp:
-            dep, idxs = g
-            layer = dep.target.module
-            source_layer_name = dep.source._name
-            target_layer_name = dep.target._name
-
-            trigger = dep.trigger.__name__
-            handler = dep.handler.__name__
-
-            if isinstance(layer, (nn.Linear, nn.LayerNorm, nn.Conv2d)):
-
-                # print(target_layer_name)
-                # print(source_layer_name)
-                # print(type(layer))
-                # print(handler)
-                # print(trigger)
-                # print(idxs)
-
-                # if isinstance(layer, nn.Conv2d):
-                #     print(target_layer_name)
-                #     print("Output channels Pruned: ", len(idxs))
-
-                if handler == "prune_out_channels":
-                    pruned_index_out[target_layer_name] = idxs
-                    non_pruned_index_out[target_layer_name] = get_unpruned_indices(orig_dimensions[f"{target_layer_name}.weight"], idxs)
-
-                    # print(pruned_index_out[target_layer_name])
-                    # print(non_pruned_index_out[target_layer_name])
-                    # print("--------------------------------------")
-                elif handler == "prune_in_channels":
-                    pruned_index_in[target_layer_name] = idxs
-                    non_pruned_index_in[target_layer_name] = get_unpruned_indices(orig_dimensions[f"{target_layer_name}.weight"], idxs, dim="in")
-
-                    # print(pruned_index_in[target_layer_name])
-                    # print(non_pruned_index_in[target_layer_name])
-                    # print("--------------------------------------")
     
-        grp.prune()
+    # ====================ITERATIVE PRUNER================== #
+    for i in range(args.pruning_steps):
+        print(f"================PRUNING STAGE-{i+1}======================")
+        for grp in pruner.step(interactive=True):
+            # print(grp)
+            # print("======================================")
+
+            for dep, idxs in grp:
+                layer = dep.target.module
+                source_layer_name = dep.source._name
+                target_layer_name = dep.target._name
+
+                trigger = dep.trigger.__name__
+                handler = dep.handler.__name__
+
+                if isinstance(layer, (nn.Linear, nn.LayerNorm, nn.Conv2d)):
+
+                    # print(target_layer_name)
+                    # print(source_layer_name)
+                    # print(type(layer))
+                    # print(handler)
+                    # print(trigger)
+                    # print(idxs)
+
+                    if handler == "prune_out_channels":
+                        for j in range(i):
+                            if target_layer_name in pruned_index_out[j].keys() and set(pruned_index_out[j][target_layer_name]).issubset(set(idxs)):
+                                idxs = [item for item in idxs if item not in pruned_index_out[j][target_layer_name]]
+
+                        # if i==0:
+                        #     pruned_index_out[i][target_layer_name] = idxs
+                        # else:
+                        #     if target_layer_name in pruned_index_out[i-1].keys() and set(pruned_index_out[i-1][target_layer_name]).issubset(set(idxs)):
+                        #         idxs = [item for item in idxs if item not in pruned_index_out[i-1][target_layer_name]]
+                        pruned_index_out[i][target_layer_name] = idxs
+                        # non_pruned_index_out[i][target_layer_name] = get_unpruned_indices(orig_dimensions[f"{target_layer_name}.weight"], idxs)
+                        idxs_non = get_unpruned_indices(orig_dimensions[f"{target_layer_name}.weight"], idxs)
+                        for j in range(i):
+                            if target_layer_name in (non_pruned_index_out[j].keys() | pruned_index_out[j].keys()):
+                                idxs_non = [item for item in idxs_non if item not in pruned_index_out[j][target_layer_name]]
+                        non_pruned_index_out[i][target_layer_name] = idxs_non
+                        
+
+                        # print(target_layer_name)
+                        # print(pruned_index_out[i][target_layer_name])
+                        # print(non_pruned_index_out[i][target_layer_name])
+                        # print("--------------------------------------")
+
+                        # layer.weight.data[torch.tensor(idxs, dtype=torch.long)] *= 0
+                        # if layer.bias is not None:
+                        #     layer.bias.data[torch.tensor(idxs, dtype=torch.long)] *= 0
+
+                    elif handler == "prune_in_channels":
+                        for j in range(i):
+                            if target_layer_name in pruned_index_in[j].keys() and set(pruned_index_in[j][target_layer_name]).issubset(set(idxs)):
+                                idxs = [item for item in idxs if item not in pruned_index_in[j][target_layer_name]]
+                                
+                        # if i==0:
+                        #     pruned_index_in[i][target_layer_name] = idxs
+                        # else:
+                        #     if target_layer_name in pruned_index_in[i-1].keys() and set(pruned_index_in[i-1][target_layer_name]).issubset(set(idxs)):
+                        #         idxs = [item for item in idxs if item not in pruned_index_in[i-1][target_layer_name]]
+                        pruned_index_in[i][target_layer_name] = idxs
+                        # non_pruned_index_in[i][target_layer_name] = get_unpruned_indices(orig_dimensions[f"{target_layer_name}.weight"], idxs, dim="in")
+                        idxs_non = get_unpruned_indices(orig_dimensions[f"{target_layer_name}.weight"], idxs, dim="in")
+                        for j in range(i):
+                            if target_layer_name in (non_pruned_index_in[j].keys() | pruned_index_in[j].keys()):
+                                idxs_non = [item for item in idxs_non if item not in pruned_index_in[j][target_layer_name]]
+                        non_pruned_index_in[i][target_layer_name] = idxs_non
+
+                        # print(target_layer_name)
+                        # print(pruned_index_in[i][target_layer_name])
+                        # print(non_pruned_index_in[i][target_layer_name])
+                        # print("--------------------------------------")
+
+                        # layer.weight.data[:, torch.tensor(idxs, dtype=torch.long)] *= 0
+                        # if layer.bias is not None:
+                        #     layer.bias.data[:, torch.tensor(idxs, dtype=torch.long)] *= 0
+        
+            if (i+1) == args.pruning_steps:
+                grp.prune()
+
+        
+        pruned_weights = extract_vit_weight_subset(orig_copy, pruned_index_out[i], pruned_index_in[i])
+        with open(f"./saves/pruning_metadata/pruned_ViT_weights_Level_{args.pruning_steps-i}.txt", "w") as file:
+            for key, value in pruned_weights.items():
+                file.write(f"  {key}: {value}\n")
+        pruned_weights_recorder[f"Level_{args.pruning_steps-i}"] = pruned_weights
 
 
+        non_pruned_weights = extract_vit_weight_subset(orig_copy, non_pruned_index_out[i], non_pruned_index_in[i])
+        with open(f"./saves/pruning_metadata/non_pruned_ViT_weights_Level_{args.pruning_steps-i}.txt", "w") as file:
+            for key, value in non_pruned_weights.items():
+                file.write(f"  {key}: {value}\n")
+        non_pruned_weights_recorder[f"Level_{args.pruning_steps-i}"] = non_pruned_weights
+
+    print("Iterative Pruning complete")
+
+
+
+    
     ############################################################################################################
     # ---------------------------------------------FOR DEBUGGING-----------------------------------------------#
+    
+    # merged_out = []
+    # merged_in = []
+    # sample = "vit.encoder.layer.10.attention.attention.query"
 
-    # print(pruned_index_out.keys())
-    # print(pruned_index_in.keys())
+    # for i in range(args.pruning_steps):
+    #     print(f"================PRUNING STAGE-{i+1}======================")
+    #     for key,value in pruned_index_out[i].items():
+    #         print("Out/Dim 0 Indices")
+    #         print(key, value)
+    #         print("# Pruned Index:", len(value))
+    #         print("NON-PRUNED")
+    #         print(non_pruned_index_out[i][key])
+    #         print("# Non-Pruned Index:", len(non_pruned_index_out[i][key]))
+    #         print(set(value) & set(non_pruned_index_out[i][key]))
+    #     for key,value in pruned_index_in[i].items():
+    #         print("In/Dim 1 Indices")
+    #         print(len(value))
+    #         print(key, value)
+    #         print("# Pruned Index:", len(value))
+    #         print("NON-PRUNED")
+    #         print(non_pruned_index_in[i][key])
+    #         print("# Non-Pruned Index:", len(non_pruned_index_in[i][key]))
+    #         print(set(value) & set(non_pruned_index_in[i][key]))
 
-    # common_keys = (sorted(list(pruned_index_in.keys() & pruned_index_out.keys()), key=extract_layer_index))
-    # unique_dim_out = pruned_index_out.keys() - pruned_index_in.keys()
-    # unique_dim_in = pruned_index_in.keys() - pruned_index_out.keys()
-    # print(sorted(list(common_keys)))
-    # print(unique_dim_out)
-    # print(unique_dim_in)
+    #     print(pruned_index_out[i].keys())
+    #     print(pruned_index_in[i].keys())
 
-    # for key in common_keys:
-    #     print(f"Pruned out Indices {key} => {pruned_index_out[key]}")
-    #     print(len(pruned_index_out[key]))
-    #     print(f"Pruned in Indices {key} => {pruned_index_in[key]}")
-    #     print(len(pruned_index_in[key]))
-    #     print()
+    #     if sample in pruned_index_out[i]:
+    #         print("Pruned Out Indices")
+    #         print(pruned_index_out[i][sample])
+    #         print("Number of Index Pruned:", len(pruned_index_out[i][sample]))
+    #         merged_out = merged_out + pruned_index_out[i][sample]
+    #     if sample in pruned_index_in[i]:
+    #         print("Pruned In Indices")
+    #         print(pruned_index_in[i][sample])
+    #         print("Number of Index Pruned:", len(pruned_index_in[i][sample]))
+    #         merged_in = merged_in + pruned_index_in[i][sample]
+
+
+    # # Check for duplicates
+    # unique_items = set(merged_out)
+    # duplicates = [item for item in unique_items if merged_out.count(item) > 1]
+    # if len(duplicates) > 0:
+    #     print("Found Duplicates in pruned out indices:", duplicates)
+
+    # unique_items = set(merged_in)
+    # duplicates = [item for item in unique_items if merged_in.count(item) > 1]
+    # if len(duplicates) > 0:
+    #     print("Found Duplicates in pruned in indices:", duplicates)
+
+    # exit()
     ############################################################################################################
-
-    pruned_weights = extract_vit_weight_subset(orig_copy, pruned_index_out, pruned_index_in)
-    with open(f"./saves/pruning_metadata/pruned_ViT_weights.txt", "w") as file:
-        for key, value in pruned_weights.items():
-            file.write(f"  {key}: {value}\n")
-
-    # non_pruned_weights = extract_vit_weight_subset(orig_copy, non_pruned_index_out, non_pruned_index_in)
-    # with open(f"./saves/pruning_metadata/non_pruned_ViT_weights.txt", "w") as file:
-    #     for key, value in non_pruned_weights.items():
-    #         file.write(f"  {key}: {value}\n")
 
     # Modify the attention head size and all head size after pruning
     for id, m in enumerate(model.modules()):
@@ -599,12 +686,12 @@ def main(args):
             print("num_heads:", m.num_attention_heads, 'head_dims:', m.attention_head_size, 'all_head_size:', m.all_head_size)
             print()
 
-    # Fine-Tune the pruned model
-    fine_tuner(args, device, model, train_loader, val_loader, train_sampler, val_sampler)
+    # Fine-Tune the Core model
+    # fine_tuner(args, device, model, train_loader, val_loader, train_sampler, val_sampler)
 
-    non_pruned_weights = extract_vit_core_weights(model)
-    with open(f"./saves/pruning_metadata/non_pruned_ViT_weights.txt", "w") as file:
-        for key, value in non_pruned_weights.items():
+    core_weights = extract_vit_core_weights(model)
+    with open(f"./saves/pruning_metadata/non_pruned_ViT_weights_Level_1.txt", "w") as file:
+        for key, value in core_weights.items():
             file.write(f"  {key}: {value}\n")
 
     if args.test_accuracy:
@@ -615,7 +702,7 @@ def main(args):
     if args.save_as is not None:
         print("Saving the pruned model to %s..."%args.save_as)
         os.makedirs(os.path.dirname(args.save_as), exist_ok=True)
-        torch.save(model.state_dict(), f"{args.save_as}Vit_b_16_Pruned_{str(args.pruning_ratio)}_state_dict_{args.exp_name}.pth")
+        torch.save(model.state_dict(), f"{args.save_as}Vit_b_16_Pruned_Level_1_state_dict_{args.exp_name}.pth")
 
     print("----------------------------------------")
     print("Summary:")
@@ -626,68 +713,81 @@ def main(args):
         print("Base Loss: %.4f, Pruned Loss: %.4f"%(loss_ori, loss_pruned))
         print("Base Accuracy: %.4f, Pruned Accuracy: %.4f"%(acc_ori, acc_pruned))
 
-    # visualize_weight_matrix(model, "vit.encoder.layer.0.attention.attention.query.weight", plot_name="pruned")
-
-
-
+    
     if args.rebuild:
-        rebuilt_model = create_vit_general(dim_dict=orig_dimensions).to(device)
-        # rebuilt_model = ViTForImageClassification.from_pretrained(args.model_name).to(device)
+        print("----------------------------------------START REBUILDING----------------------------------------")
+        macs_recorder = []
+        param_recorder = []
+        acc_recorder = []
 
-        rebuilt_model = update_vit_weights(rebuilt_model, [pruned_index_in, pruned_index_out], [non_pruned_index_in, non_pruned_index_out], pruned_weights, non_pruned_weights).to(device)
+        for i in range(args.pruning_steps):
+            print(f"================REBUILDING STAGE-{i+2}======================")
+
+            rebuilding_weights = non_pruned_weights_recorder[f"Level_{args.pruning_steps-(i+1)}"]
+            rebuild_dim = get_vit_info(rebuilding_weights, num_heads=orig_copy.config.num_attention_heads)
+            print(rebuild_dim)
+            rebuilt_model = create_vit_general(dim_dict=rebuild_dim).to(device)
+            exit()
+
+            rebuilt_model = update_vit_weights(rebuilt_model, [pruned_index_in, pruned_index_out], [non_pruned_index_in, non_pruned_index_out], pruned_weights, non_pruned_weights).to(device)
+            
+            # partial freezing of grads for freezing the core weights
+            freeze_partial_weights(rebuilt_model, non_pruned_index_in, non_pruned_index_out, device)
+
+            # sample_layer = 'vit.encoder.layer.11.output.dense'
+
+            # print("Layer Name:", sample_layer)
+            # print("Before Fine-Tune")
+            # for layer_name, layer in rebuilt_model.named_modules():
+            #     if layer_name == sample_layer:
+            #         print(layer.weight.shape)
+            #         exclude_dim0 = torch.tensor(non_pruned_index_out.get(layer_name, None), dtype=torch.long, device=device)
+            #         exclude_dim1 = torch.tensor(non_pruned_index_in.get(layer_name, None), dtype=torch.long, device=device)
+            #         print(layer.weight[exclude_dim0[:, None], exclude_dim1].shape)
+            #         print(layer.weight[exclude_dim0[:, None], exclude_dim1].sum())
+            #         print(model.state_dict()[f"{layer_name}.weight"].sum())
+            #         print(layer.weight[exclude_dim0[:, None], exclude_dim1] == model.state_dict()[f"{layer_name}.weight"].to(device))
+
+
+            # fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler)
+            fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler, rebuild=True, in_freeze_indices=non_pruned_index_in, out_freeze_indices=non_pruned_index_out)
+
+            # print("Layer Name:", sample_layer)
+            # print("After Fine-Tune")
+            # for layer_name, layer in rebuilt_model.named_modules():
+            #     if layer_name == sample_layer:
+            #         print(layer.weight.shape)
+            #         exclude_dim0 = torch.tensor(non_pruned_index_out.get(layer_name, None), dtype=torch.long, device=device)
+            #         exclude_dim1 = torch.tensor(non_pruned_index_in.get(layer_name, None), dtype=torch.long, device=device)
+            #         print(layer.weight[exclude_dim0[:, None], exclude_dim1].shape)
+            #         print(layer.weight[exclude_dim0[:, None], exclude_dim1].sum())
+            #         print(model.state_dict()[f"{layer_name}.weight"].sum())
+            #         print(layer.weight[exclude_dim0[:, None], exclude_dim1] == model.state_dict()[f"{layer_name}.weight"].to(device))
+
+            
+            if args.test_accuracy:
+                print("Testing accuracy of the rebuild model...")
+                acc_rebuilt, loss_rebuilt = evaluate(rebuilt_model, criterion, val_loader, device=device, dist=args.distributed)
+                acc_recorder.append(acc_rebuilt)
+                print("Accuracy: %.4f, Loss: %.4f"%(acc_rebuilt, loss_rebuilt))
+
+            if args.save_as is not None: 
+                print("Saving the rebuilt model to %s..."%args.save_as)
+                torch.save(rebuilt_model.state_dict(), f"{args.save_as}Vit_b_16_Rebuilt_{str(args.pruning_ratio)}_state_dict_{args.exp_name}.pth")
+
+            print("----------------------------------------")
+            print("Summary:")
+            rebuilt_macs, rebuilt_params = tp.utils.count_ops_and_params(rebuilt_model, example_inputs)
+            macs_recorder.append(rebuilt_macs)
+            param_recorder.append(rebuilt_params)
+            print("Base MACs: %.2f G, Pruned MACs: %.2f G, Rebuilt MACs: %.2f G"%(base_macs/1e9, pruned_macs/1e9, rebuilt_macs/1e9))
+            print("Base Params: %.2f M, Pruned Params: %.2f M, Rebuilt Params: %.2f M"%(base_params/1e6, pruned_params/1e6, rebuilt_params/1e6))
+            if args.test_accuracy:
+                print("Base Loss: %.4f, Pruned Loss: %.4f, Rebuilt Loss: %.4f"%(loss_ori, loss_pruned, loss_rebuilt))
+                print("Base Accuracy: %.4f, Pruned Accuracy: %.4f, Rebuilt Accuracy: %.4f"%(acc_ori, acc_pruned, acc_rebuilt))
         
-        # partial freezing of grads for freezing the core weights
-        freeze_partial_weights(rebuilt_model, non_pruned_index_in, non_pruned_index_out, device)
-
-        # sample_layer = 'vit.encoder.layer.11.output.dense'
-
-        # print("Layer Name:", sample_layer)
-        # print("Before Fine-Tune")
-        # for layer_name, layer in rebuilt_model.named_modules():
-        #     if layer_name == sample_layer:
-        #         print(layer.weight.shape)
-        #         exclude_dim0 = torch.tensor(non_pruned_index_out.get(layer_name, None), dtype=torch.long, device=device)
-        #         exclude_dim1 = torch.tensor(non_pruned_index_in.get(layer_name, None), dtype=torch.long, device=device)
-        #         print(layer.weight[exclude_dim0[:, None], exclude_dim1].shape)
-        #         print(layer.weight[exclude_dim0[:, None], exclude_dim1].sum())
-        #         print(model.state_dict()[f"{layer_name}.weight"].sum())
-        #         print(layer.weight[exclude_dim0[:, None], exclude_dim1] == model.state_dict()[f"{layer_name}.weight"].to(device))
-
-
-        # fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler)
-        fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler, rebuild=True, in_freeze_indices=non_pruned_index_in, out_freeze_indices=non_pruned_index_out)
-
-        # print("Layer Name:", sample_layer)
-        # print("After Fine-Tune")
-        # for layer_name, layer in rebuilt_model.named_modules():
-        #     if layer_name == sample_layer:
-        #         print(layer.weight.shape)
-        #         exclude_dim0 = torch.tensor(non_pruned_index_out.get(layer_name, None), dtype=torch.long, device=device)
-        #         exclude_dim1 = torch.tensor(non_pruned_index_in.get(layer_name, None), dtype=torch.long, device=device)
-        #         print(layer.weight[exclude_dim0[:, None], exclude_dim1].shape)
-        #         print(layer.weight[exclude_dim0[:, None], exclude_dim1].sum())
-        #         print(model.state_dict()[f"{layer_name}.weight"].sum())
-        #         print(layer.weight[exclude_dim0[:, None], exclude_dim1] == model.state_dict()[f"{layer_name}.weight"].to(device))
-
         
-        if args.test_accuracy:
-            print("Testing accuracy of the rebuild model...")
-            acc_rebuilt, loss_rebuilt = evaluate(rebuilt_model, criterion, val_loader, device=device, dist=args.distributed)
-            print("Accuracy: %.4f, Loss: %.4f"%(acc_rebuilt, loss_rebuilt))
-
-        if args.save_as is not None: 
-            print("Saving the rebuilt model to %s..."%args.save_as)
-            torch.save(rebuilt_model.state_dict(), f"{args.save_as}Vit_b_16_Rebuilt_{str(args.pruning_ratio)}_state_dict_{args.exp_name}.pth")
-
-        print("----------------------------------------")
-        print("Summary:")
-        rebuilt_macs, rebuilt_params = tp.utils.count_ops_and_params(rebuilt_model, example_inputs)
-        print("Base MACs: %.2f G, Pruned MACs: %.2f G, Rebuilt MACs: %.2f G"%(base_macs/1e9, pruned_macs/1e9, rebuilt_macs/1e9))
-        print("Base Params: %.2f M, Pruned Params: %.2f M, Rebuilt Params: %.2f M"%(base_params/1e6, pruned_params/1e6, rebuilt_params/1e6))
-        if args.test_accuracy:
-            print("Base Loss: %.4f, Pruned Loss: %.4f, Rebuilt Loss: %.4f"%(loss_ori, loss_pruned, loss_rebuilt))
-            print("Base Accuracy: %.4f, Pruned Accuracy: %.4f, Rebuilt Accuracy: %.4f"%(acc_ori, acc_pruned, acc_rebuilt))
-            plot_comparison(accuracy=[acc_ori, acc_pruned, acc_rebuilt], macs=[base_macs, pruned_macs, rebuilt_macs], pruning_ratio=args.pruning_ratio, name=args.exp_name)
+        plot_comparison(accuracy=[acc_ori, acc_pruned, *acc_rebuilt], macs=[base_macs, pruned_macs, *macs_recorder], pruning_ratio=args.pruning_ratio, name=args.exp_name)
 
 
     
@@ -696,4 +796,3 @@ def main(args):
 if __name__ == '__main__':
     args = get_args_parser().parse_args()
     main(args)
-    # compare_performance(args)

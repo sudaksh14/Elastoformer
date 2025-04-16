@@ -495,6 +495,37 @@ def get_layer_size(state_dict):
 
     return vit_hidden_info
 
+def get_vit_info(non_pruned_weights, num_heads=12):
+    """
+    Extracts the embedding size from a dictionary containing non-pruned weights.
+
+    Args:
+        non_pruned_dict (dict): Dictionary containing non-pruned weights.
+
+    Returns:
+        dict: Vit Model Config for Rebuilding.
+    """
+    vit_info = {}
+
+    for layer_name, layer_weights in non_pruned_weights.items():
+        print(layer_name)
+        print(layer_weights["Weight"].shape)
+        print(layer_weights["Bias"].shape)
+
+    for layer_name, layer_weights in non_pruned_weights.items():
+        if "vit.embeddings.patch_embeddings.projection" in layer_name:
+            vit_info["Embed_Dim"] = layer_weights["Weight"].shape[0]
+
+        if "vit.encoder.layer.0.intermediate.dense" in layer_name:
+            vit_info["FFN_Intermediate_Dim"] = layer_weights["Weight"].shape[0]
+
+        if "vit.encoder.layer.0.output.dense" in layer_name:
+            vit_info["FFN_Output_Dim"] = layer_weights["Weight"].shape[0]
+
+    vit_info["num_layers"] = max(int(key.split(".")[3]) for key in non_pruned_weights if key.startswith("vit.encoder.layer")) + 1
+    vit_info["num_heads"] = num_heads
+    return vit_info
+
 def extract_vit_weight_subset(model, out_indices_dict, in_indices_dict):
     """
     Extracts weight subsets from a Vision Transformer model based on specified output and input indices.

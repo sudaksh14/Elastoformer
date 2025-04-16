@@ -278,7 +278,7 @@ def fine_tuner(args, device, model, data_loader, data_loader_test, train_sampler
     # dataset, dataset_test, train_sampler, test_sampler = load_data(train_dir, val_dir, args)
 
     # num_classes = len(dataset.classes)
-    num_classes = 1000
+    num_classes = 10
     mixup_cutmix = get_mixup_cutmix(
         mixup_alpha=args.mixup_alpha, cutmix_alpha=args.cutmix_alpha, num_classes=num_classes, use_v2=args.use_v2
     )

@@ -34,8 +34,8 @@ def check_overlap(big_tensor, small_tensor):
 
 def compare_weights(sample_layer="vit.encoder.layer.0.attention.attention.key"):
     
-        path_core = "./saves/state_dicts/Vit_b_16_Pruned_0.25_state_dict_ViT_Adaptivity_selective_clipping.pth"
-        path_rebuilt = "./saves/state_dicts/Vit_b_16_Rebuilt_0.25_state_dict_ViT_Adaptivity_selective_clipping.pth"
+        path_core = "./saves/state_dicts/Vit_b_16_Pruned_0.25_state_dict_ViT_Adaptivity_selective_clipping_full_data.pth"
+        path_rebuilt = "./saves/state_dicts/Vit_b_16_Rebuilt_0.25_state_dict_ViT_Adaptivity_selective_clipping_full_data.pth"
 
         prune_dict = torch.load(path_core, map_location=device)
         rebuilt_dict = torch.load(path_rebuilt, map_location=device)

@@ -3,10 +3,11 @@
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
 #SBATCH --job-name=simple
-#SBATCH --partition=all
+#SBATCH --account=all6000users
+#SBATCH --partition=all6000
 #SBATCH --gres=gpu:1
 #SBATCH --mem=128G
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=16
 #SBATCH --output=./outputs/slurm_output_%A.out
 #SBATCH --exclude=ivi-cn005,ivi-cn009,ivi-cn010,ivi-cn011,ivi-cn012,ivi-cn001
 
@@ -16,13 +17,30 @@ echo "Node name: $(hostname)"
 echo -n memory=; ulimit -m
 echo -n nproc=; nproc
 
-nvidia-smi
-
 # Initialize Conda and activate environment
 eval "$(conda shell.bash hook)"
 conda activate prune_llm
 
-srun python compare_tensor.py
+nvidia-smi
+
+# srun python datasets.py
+# srun python compare_tensor.py
+
+srun python ViT_iterative_adaptivity.py \
+    --exp_name ViT_Adaptivity_selective_clipping \
+    --model_name google/vit-base-patch16-224 \
+    --pruning_type l1 \
+    --pruning_ratio 0.9 \
+    --iterative --pruning_steps 3 \
+    --taylor_batchs 10 \
+    --data_path /ssdstore/ImageNet/ \
+    --train_batch_size 64 \
+    --val_batch_size 64 \
+    --test_accuracy \
+    --rebuild \
+    --epochs 1 \
+    --clip-grad-norm 1 --amp --ra-sampler \
+    --debug \
 
 # srun python ViT_adaptivity.py \
 #     --exp_name ViT_Adaptivity_selective_clipping \
