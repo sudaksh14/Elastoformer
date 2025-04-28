@@ -437,8 +437,8 @@ def main(args):
     else: raise NotImplementedError
 
     if args.pruning_type=='taylor' or args.test_accuracy:
-        # train_loader, val_loader, train_sampler, val_sampler = prepare_imagenet(args.data_path, train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size, debug=args.debug)
-        train_loader, val_loader, train_sampler, val_sampler = prepare_imagenette()
+        train_loader, val_loader, train_sampler, val_sampler = prepare_imagenet(args.data_path, train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size, debug=args.debug)
+        # train_loader, val_loader, train_sampler, val_sampler = prepare_imagenette()
 
     # Load the model
     model = ViTForImageClassification.from_pretrained(args.model_name).to(device)
@@ -454,7 +454,7 @@ def main(args):
     if args.test_accuracy:
         criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
         print("Testing accuracy of the original model...")
-        acc_ori, loss_ori = evaluate(model, criterion, val_loader, device=device, dist=args.distributed)
+        acc_ori, loss_ori = evaluate(orig_copy, criterion, val_loader, device=device, dist=args.distributed)
         print("Accuracy: %.4f, Loss: %.4f"%(acc_ori, loss_ori))
 
     print("Pruning %s..."%args.model_name)
@@ -481,9 +481,12 @@ def main(args):
                 iterative_steps=args.pruning_steps, # number of pruning steps
                 pruning_ratio=args.pruning_ratio, # target pruning ratio
                 ignored_layers=ignored_layers,
-                round_to=1,
+                round_to=8,
                 num_heads=num_heads,
-                prune_head_dims=True,
+                prune_num_heads = False,  # remove entire heads in multi-head attention. Default: False.
+                prune_head_dims = True,   # remove head dimensions in multi-head attention. Default: True.
+                head_pruning_ratio = args.pruning_ratio, # head pruning ratio. Default: 0.0.
+                head_pruning_ratio_dict = None, # (Dict[nn.Module, float]): layer-specific head pruning ratio. Default: None.
                 output_transform=lambda out: out.logits.sum() # Transform to convert logits to scalar
     )
 
@@ -600,19 +603,21 @@ def main(args):
             if (i+1) == args.pruning_steps:
                 grp.prune()
 
-        
+        # Saving Pruned metadata
         pruned_weights = extract_vit_weight_subset(orig_copy, pruned_index_out[i], pruned_index_in[i])
-        with open(f"./saves/pruning_metadata/pruned_ViT_weights_Level_{args.pruning_steps-i}.txt", "w") as file:
+        with open(f"./saves/pruning_metadata/pruned_ViT_weights_Level_{args.pruning_steps + 1 - i}.txt", "w") as file:
             for key, value in pruned_weights.items():
                 file.write(f"  {key}: {value}\n")
-        pruned_weights_recorder[f"Level_{args.pruning_steps-i}"] = pruned_weights
+        pruned_weights_recorder[f"Level_{args.pruning_steps + 1 - i}"] = pruned_weights
 
-
+        # Saving Non-Pruned metadata
         non_pruned_weights = extract_vit_weight_subset(orig_copy, non_pruned_index_out[i], non_pruned_index_in[i])
-        with open(f"./saves/pruning_metadata/non_pruned_ViT_weights_Level_{args.pruning_steps-i}.txt", "w") as file:
+        with open(f"./saves/pruning_metadata/non_pruned_ViT_weights_Level_{args.pruning_steps + 1 - i}.txt", "w") as file:
             for key, value in non_pruned_weights.items():
                 file.write(f"  {key}: {value}\n")
-        non_pruned_weights_recorder[f"Level_{args.pruning_steps-i}"] = non_pruned_weights
+        non_pruned_weights_recorder[f"Level_{args.pruning_steps + 1 - i}"] = non_pruned_weights
+
+        print(f"Pruned & Non-Pruned weights stored for Level-{args.pruning_steps + 1 - i}")
 
     print("Iterative Pruning complete")
 
@@ -624,27 +629,27 @@ def main(args):
     
     # merged_out = []
     # merged_in = []
-    # sample = "vit.encoder.layer.10.attention.attention.query"
+    # sample = "vit.encoder.layer.0.attention.attention.query"
 
     # for i in range(args.pruning_steps):
     #     print(f"================PRUNING STAGE-{i+1}======================")
-    #     for key,value in pruned_index_out[i].items():
-    #         print("Out/Dim 0 Indices")
-    #         print(key, value)
-    #         print("# Pruned Index:", len(value))
-    #         print("NON-PRUNED")
-    #         print(non_pruned_index_out[i][key])
-    #         print("# Non-Pruned Index:", len(non_pruned_index_out[i][key]))
-    #         print(set(value) & set(non_pruned_index_out[i][key]))
-    #     for key,value in pruned_index_in[i].items():
-    #         print("In/Dim 1 Indices")
-    #         print(len(value))
-    #         print(key, value)
-    #         print("# Pruned Index:", len(value))
-    #         print("NON-PRUNED")
-    #         print(non_pruned_index_in[i][key])
-    #         print("# Non-Pruned Index:", len(non_pruned_index_in[i][key]))
-    #         print(set(value) & set(non_pruned_index_in[i][key]))
+        # for key,value in pruned_index_out[i].items():
+        #     print("Out/Dim 0 Indices")
+        #     print(key, value)
+        #     print("# Pruned Index:", len(value))
+        #     print("NON-PRUNED")
+        #     print(non_pruned_index_out[i][key])
+        #     print("# Non-Pruned Index:", len(non_pruned_index_out[i][key]))
+        #     print(set(value) & set(non_pruned_index_out[i][key]))
+        # for key,value in pruned_index_in[i].items():
+        #     print("In/Dim 1 Indices")
+        #     print(len(value))
+        #     print(key, value)
+        #     print("# Pruned Index:", len(value))
+        #     print("NON-PRUNED")
+        #     print(non_pruned_index_in[i][key])
+        #     print("# Non-Pruned Index:", len(non_pruned_index_in[i][key]))
+        #     print(set(value) & set(non_pruned_index_in[i][key]))
 
     #     print(pruned_index_out[i].keys())
     #     print(pruned_index_in[i].keys())
@@ -680,17 +685,18 @@ def main(args):
         if isinstance(m, ViTSelfAttention):
             print("Layer:", id)
             print("num_heads:", m.num_attention_heads, 'head_dims:', m.attention_head_size, 'all_head_size:', m.all_head_size, '=>')
-            m.num_attention_heads = pruner.num_heads[m.query]
+            # m.num_attention_heads = pruner.num_heads[m.query]
+            m.num_attention_heads = 8
             m.attention_head_size = m.query.out_features // m.num_attention_heads
             m.all_head_size = m.query.out_features
             print("num_heads:", m.num_attention_heads, 'head_dims:', m.attention_head_size, 'all_head_size:', m.all_head_size)
             print()
 
     # Fine-Tune the Core model
-    # fine_tuner(args, device, model, train_loader, val_loader, train_sampler, val_sampler)
+    fine_tuner(args, device, model, train_loader, val_loader, train_sampler, val_sampler)
 
     core_weights = extract_vit_core_weights(model)
-    with open(f"./saves/pruning_metadata/non_pruned_ViT_weights_Level_1.txt", "w") as file:
+    with open(f"./saves/pruning_metadata/non_pruned_ViT_weights_Level_2.txt", "w") as file:
         for key, value in core_weights.items():
             file.write(f"  {key}: {value}\n")
 
@@ -717,32 +723,33 @@ def main(args):
     if args.rebuild:
         print("----------------------------------------START REBUILDING----------------------------------------")
         macs_recorder = []
-        param_recorder = []
         acc_recorder = []
 
         for i in range(args.pruning_steps):
-            print(f"================REBUILDING STAGE-{i+2}======================")
+            print(f"================REBUILDING DESCENDANT MODEL LEVEL-{i+2}======================")
 
-            rebuilding_weights = non_pruned_weights_recorder[f"Level_{args.pruning_steps-(i+1)}"]
-            rebuild_dim = get_vit_info(rebuilding_weights, num_heads=orig_copy.config.num_attention_heads)
+            rebuilding_weights = non_pruned_weights_recorder[f"Level_{i+2}"]
+            pruned_weights = pruned_weights_recorder[f"Level_{i+2}"]
+            # rebuild_dim = get_vit_info(rebuilding_weights, num_heads=orig_copy.config.num_attention_heads)
+            rebuild_dim = get_vit_info(pruned_weights, rebuilding_weights, num_heads=8)
             print(rebuild_dim)
             rebuilt_model = create_vit_general(dim_dict=rebuild_dim).to(device)
-            exit()
-
-            rebuilt_model = update_vit_weights(rebuilt_model, [pruned_index_in, pruned_index_out], [non_pruned_index_in, non_pruned_index_out], pruned_weights, non_pruned_weights).to(device)
+            rebuilt_model, pruned_index_mapped, non_pruned_index_mapped = update_vit_weights_global(rebuilt_model, [pruned_index_in[args.pruning_steps-i-1], pruned_index_out[args.pruning_steps-i-1]], 
+                                               [non_pruned_index_in[args.pruning_steps-i-1], non_pruned_index_out[args.pruning_steps-i-1]], 
+                                               pruned_weights_recorder[f"Level_{i+2}"], non_pruned_weights_recorder[f"Level_{i+2}"], device=device)
             
             # partial freezing of grads for freezing the core weights
-            freeze_partial_weights(rebuilt_model, non_pruned_index_in, non_pruned_index_out, device)
+            # freeze_partial_weights_global(rebuilt_model, non_pruned_index_in[i+1], non_pruned_index_out[i+1], device)
+            freeze_partial_weights_global(rebuilt_model, non_pruned_index_mapped[0], non_pruned_index_mapped[1], device)
 
             # sample_layer = 'vit.encoder.layer.11.output.dense'
-
             # print("Layer Name:", sample_layer)
             # print("Before Fine-Tune")
             # for layer_name, layer in rebuilt_model.named_modules():
             #     if layer_name == sample_layer:
             #         print(layer.weight.shape)
-            #         exclude_dim0 = torch.tensor(non_pruned_index_out.get(layer_name, None), dtype=torch.long, device=device)
-            #         exclude_dim1 = torch.tensor(non_pruned_index_in.get(layer_name, None), dtype=torch.long, device=device)
+            #         exclude_dim0 = torch.tensor(non_pruned_index_mapped[1].get(layer_name, None), dtype=torch.long, device=device)
+            #         exclude_dim1 = torch.tensor(non_pruned_index_mapped[0].get(layer_name, None), dtype=torch.long, device=device)
             #         print(layer.weight[exclude_dim0[:, None], exclude_dim1].shape)
             #         print(layer.weight[exclude_dim0[:, None], exclude_dim1].sum())
             #         print(model.state_dict()[f"{layer_name}.weight"].sum())
@@ -750,15 +757,15 @@ def main(args):
 
 
             # fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler)
-            fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler, rebuild=True, in_freeze_indices=non_pruned_index_in, out_freeze_indices=non_pruned_index_out)
+            fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler, rebuild=True, in_freeze_indices=non_pruned_index_mapped[0], out_freeze_indices=non_pruned_index_mapped[1])
 
             # print("Layer Name:", sample_layer)
             # print("After Fine-Tune")
             # for layer_name, layer in rebuilt_model.named_modules():
             #     if layer_name == sample_layer:
             #         print(layer.weight.shape)
-            #         exclude_dim0 = torch.tensor(non_pruned_index_out.get(layer_name, None), dtype=torch.long, device=device)
-            #         exclude_dim1 = torch.tensor(non_pruned_index_in.get(layer_name, None), dtype=torch.long, device=device)
+            #         exclude_dim0 = torch.tensor(non_pruned_index_mapped[1].get(layer_name, None), dtype=torch.long, device=device)
+            #         exclude_dim1 = torch.tensor(non_pruned_index_mapped[0].get(layer_name, None), dtype=torch.long, device=device)
             #         print(layer.weight[exclude_dim0[:, None], exclude_dim1].shape)
             #         print(layer.weight[exclude_dim0[:, None], exclude_dim1].sum())
             #         print(model.state_dict()[f"{layer_name}.weight"].sum())
@@ -773,13 +780,12 @@ def main(args):
 
             if args.save_as is not None: 
                 print("Saving the rebuilt model to %s..."%args.save_as)
-                torch.save(rebuilt_model.state_dict(), f"{args.save_as}Vit_b_16_Rebuilt_{str(args.pruning_ratio)}_state_dict_{args.exp_name}.pth")
+                torch.save(rebuilt_model.state_dict(), f"{args.save_as}Vit_b_16_Rebuilt_Level_{i+2}_state_dict_{args.exp_name}.pth")
 
             print("----------------------------------------")
-            print("Summary:")
+            print(f"Summary Level-{i+2}:")
             rebuilt_macs, rebuilt_params = tp.utils.count_ops_and_params(rebuilt_model, example_inputs)
             macs_recorder.append(rebuilt_macs)
-            param_recorder.append(rebuilt_params)
             print("Base MACs: %.2f G, Pruned MACs: %.2f G, Rebuilt MACs: %.2f G"%(base_macs/1e9, pruned_macs/1e9, rebuilt_macs/1e9))
             print("Base Params: %.2f M, Pruned Params: %.2f M, Rebuilt Params: %.2f M"%(base_params/1e6, pruned_params/1e6, rebuilt_params/1e6))
             if args.test_accuracy:
@@ -787,7 +793,7 @@ def main(args):
                 print("Base Accuracy: %.4f, Pruned Accuracy: %.4f, Rebuilt Accuracy: %.4f"%(acc_ori, acc_pruned, acc_rebuilt))
         
         
-        plot_comparison(accuracy=[acc_ori, acc_pruned, *acc_rebuilt], macs=[base_macs, pruned_macs, *macs_recorder], pruning_ratio=args.pruning_ratio, name=args.exp_name)
+        plot_comparison(accuracy=[acc_ori, acc_pruned, *acc_recorder], macs=[base_macs, pruned_macs, *macs_recorder], pruning_ratio=args.pruning_ratio, x_labels=["Original", "Level-1", "Level-2", "Level-3", "Level-4"], name=args.exp_name)
 
 
     

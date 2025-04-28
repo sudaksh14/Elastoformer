@@ -25,12 +25,13 @@ nvidia-smi
 
 # srun python datasets.py
 # srun python compare_tensor.py
+export CUDA_LAUNCH_BLOCKING=1
 
 srun python ViT_iterative_adaptivity.py \
-    --exp_name ViT_Adaptivity_selective_clipping \
+    --exp_name ViT_Iter_Adaptivity_test \
     --model_name google/vit-base-patch16-224 \
     --pruning_type l1 \
-    --pruning_ratio 0.9 \
+    --pruning_ratio 0.6 \
     --iterative --pruning_steps 3 \
     --taylor_batchs 10 \
     --data_path /ssdstore/ImageNet/ \

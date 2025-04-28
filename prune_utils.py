@@ -495,7 +495,7 @@ def get_layer_size(state_dict):
 
     return vit_hidden_info
 
-def get_vit_info(non_pruned_weights, num_heads=12):
+def get_vit_info(pruned_weights, non_pruned_weights, num_heads=12):
     """
     Extracts the embedding size from a dictionary containing non-pruned weights.
 
@@ -507,20 +507,25 @@ def get_vit_info(non_pruned_weights, num_heads=12):
     """
     vit_info = {}
 
-    for layer_name, layer_weights in non_pruned_weights.items():
-        print(layer_name)
-        print(layer_weights["Weight"].shape)
-        print(layer_weights["Bias"].shape)
+    # for layer_name, layer_weights in non_pruned_weights.items():
+    #     print(layer_name)
+    #     print(layer_weights["Weight"].shape)
+    #     print(layer_weights["Bias"].shape)
 
     for layer_name, layer_weights in non_pruned_weights.items():
+
         if "vit.embeddings.patch_embeddings.projection" in layer_name:
-            vit_info["Embed_Dim"] = layer_weights["Weight"].shape[0]
+            vit_info["Embed_Dim"] = layer_weights["Weight"].shape[0] + pruned_weights[layer_name]["Weight"].shape[0]
 
+        if "vit.encoder.layer.0.attention.attention.query" in layer_name:
+            vit_info["QKV_Dim_out"] = layer_weights["Weight"].shape[0] + pruned_weights[layer_name]["Weight"].shape[0]
+            vit_info["QKV_Dim_in"] = layer_weights["Weight"].shape[1] + pruned_weights[layer_name]["Weight"].shape[1]
+            
         if "vit.encoder.layer.0.intermediate.dense" in layer_name:
-            vit_info["FFN_Intermediate_Dim"] = layer_weights["Weight"].shape[0]
+            vit_info["FFN_Intermediate_Dim"] = layer_weights["Weight"].shape[0] + pruned_weights[layer_name]["Weight"].shape[0]
 
         if "vit.encoder.layer.0.output.dense" in layer_name:
-            vit_info["FFN_Output_Dim"] = layer_weights["Weight"].shape[0]
+            vit_info["FFN_Output_Dim"] = layer_weights["Weight"].shape[0] + pruned_weights[layer_name]["Weight"].shape[0]
 
     vit_info["num_layers"] = max(int(key.split(".")[3]) for key in non_pruned_weights if key.startswith("vit.encoder.layer")) + 1
     vit_info["num_heads"] = num_heads
@@ -560,12 +565,15 @@ def extract_vit_weight_subset(model, out_indices_dict, in_indices_dict):
             bias = layer.bias if layer.bias is not None else None
 
             out_indices = torch.tensor(out_indices_dict[layer_name], dtype=torch.long)
+            # print("Index pruned:", len(out_indices))
+            # print(out_indices)
 
             # Store subset
             selected_weights[layer_name] = {
                 "Weight": weight[out_indices].detach().cpu().numpy(),
                 "Bias": bias[out_indices].detach().cpu().numpy() if bias is not None else None
             }
+            # print("Weight pruned:", selected_weights[layer_name]["Weight"].shape)
 
         elif isinstance(layer, torch.nn.Linear):
             weight = layer.weight  # Shape: (out_dim, in_dim)
@@ -596,7 +604,7 @@ def extract_vit_weight_subset(model, out_indices_dict, in_indices_dict):
                 "Bias": bias[out_indices].detach().cpu().numpy() if bias is not None else None
             }
 
-    print("Pruned weights extracted successfully")
+    print("Weights subset extracted successfully")
 
     return selected_weights
             
@@ -683,7 +691,7 @@ def get_unpruned_indices(total_idxs, pruned_idxs, dim="out"):
     return unpruned_idxs.tolist()
 
 
-def update_vit_weights(model, pruned_indices_list, non_pruned_indices_list, pruned_weights_dict, non_pruned_weights_dict, include_bias=True):
+def update_vit_weights(model, pruned_indices_list, non_pruned_indices_list, pruned_weights_dict, non_pruned_weights_dict, include_bias=True, device=None):
     """
     Updates the weights of a Vision Transformer (ViT) model based on given indices and corresponding weights.
     
@@ -728,9 +736,9 @@ def update_vit_weights(model, pruned_indices_list, non_pruned_indices_list, prun
             non_pruned_dim1 = non_pruned_in[layer_name]
 
             # Replace pruned weights
-            weight[:, pruned_dim1] = torch.tensor(pruned_weights["Weight"], device=weight.device)
+            weight[:, pruned_dim1] = torch.tensor(pruned_weights["Weight"], device=device)
             # Replace non-pruned weights
-            weight[:, non_pruned_dim1] = torch.tensor(non_pruned_weights["Weight"], device=weight.device)
+            weight[:, non_pruned_dim1] = torch.tensor(non_pruned_weights["Weight"], device=device)
 
             # print(f"Updated weights for layer: {layer_name}")
 
@@ -745,22 +753,32 @@ def update_vit_weights(model, pruned_indices_list, non_pruned_indices_list, prun
             non_pruned_dim1 = torch.tensor(non_pruned_in[layer_name], dtype=torch.long)
         
             # Replace pruned weights
-            weight[pruned_dim0[:, None], pruned_dim1] = torch.tensor(pruned_weights["Weight"], device=weight.device)
+            weight[pruned_dim0[:, None], pruned_dim1] = torch.tensor(pruned_weights["Weight"], device=device)
             # Replace non-pruned weights
-            weight[non_pruned_dim0[:, None], non_pruned_dim1] = torch.tensor(non_pruned_weights["Weight"], device=weight.device)
+            weight[non_pruned_dim0[:, None], non_pruned_dim1] = torch.tensor(non_pruned_weights["Weight"], device=device)
 
             # print(f"Updated weights for layer: {layer_name}")
 
         elif isinstance(layer, (nn.LayerNorm, nn.Conv2d)):
 
+            print(layer_name)
+
             # Get pruned and unpruned indices
-            pruned_dim0 = pruned_out[layer_name]  # dim 0 indices
-            non_pruned_dim0 = non_pruned_out[layer_name] # dim 0 indices
+            pruned_dim0 = torch.tensor(pruned_out[layer_name], dtype=torch.long)  # dim 0 indices
+            non_pruned_dim0 = torch.tensor(non_pruned_out[layer_name], dtype=torch.long) # dim 0 indices
+
+            print("index size:", len(pruned_dim0))
+            print(pruned_dim0)
+            print("weight size:", pruned_weights["Weight"].shape)
+
+            print("non pruned index size", len(non_pruned_dim0))
+            print("non pruned weight size", non_pruned_weights["Weight"].shape)
+
 
             # Replace pruned weights
-            weight[pruned_dim0] = torch.tensor(pruned_weights["Weight"], device=weight.device)
+            weight[pruned_dim0] = torch.tensor(pruned_weights["Weight"], device=device)
             # Replace non-pruned weights
-            weight[non_pruned_dim0] = torch.tensor(non_pruned_weights["Weight"], device=weight.device)
+            weight[non_pruned_dim0] = torch.tensor(non_pruned_weights["Weight"], device=device)
 
             # print(f"Updated weights for layer: {layer_name}")
 
@@ -769,15 +787,132 @@ def update_vit_weights(model, pruned_indices_list, non_pruned_indices_list, prun
                 bias = layer.bias.data
 
                 if layer_name == 'classifier':
-                    bias = torch.tensor(non_pruned_weights["Bias"], device=weight.device)
+                    bias = torch.tensor(non_pruned_weights["Bias"], device=device)
                 
                 else:
                     # Replace pruned weights
-                    bias[pruned_dim0] = torch.tensor(pruned_weights["Bias"], device=weight.device)
+                    bias[pruned_dim0] = torch.tensor(pruned_weights["Bias"], device=device)
                     # Replace non-pruned weights
-                    bias[non_pruned_dim0] = torch.tensor(non_pruned_weights["Bias"], device=weight.device)
+                    bias[non_pruned_dim0] = torch.tensor(non_pruned_weights["Bias"], device=device)
 
     return model
+
+
+# Merge and create new continuous indices
+def merge_and_remap_indices(pruned, non_pruned):
+    merged = sorted(set(pruned + non_pruned))
+    remap = {idx: i for i, idx in enumerate(merged)}
+    pruned_mapped = [remap[idx] for idx in pruned]
+    non_pruned_mapped = [remap[idx] for idx in non_pruned]
+    return pruned_mapped, non_pruned_mapped, merged
+
+def update_vit_weights_global(model, pruned_indices_list, non_pruned_indices_list, pruned_weights_dict, non_pruned_weights_dict, include_bias=True, device=None):
+    """
+    Updates the weights of a Vision Transformer (ViT) model with merged and reindexed indices.
+
+    The pruned and non-pruned indices are combined and reindexed to a contiguous range starting from 0.
+
+    Args:
+        model (torch.nn.Module): The ViT model.
+        pruned_indices_list (tuple): Tuple of two dicts (in_indices, out_indices).
+        non_pruned_indices_list (tuple): Tuple of two dicts (in_indices, out_indices).
+        pruned_weights_dict (dict): Dict of {layer_name: {"Weight": ..., "Bias": ...}} for pruned.
+        non_pruned_weights_dict (dict): Same as above for non-pruned.
+        include_bias (bool): Whether to update biases.
+        device (torch.device or str): The device to move tensors to.
+    """
+    
+    pruned_in = pruned_indices_list[0]
+    pruned_out = pruned_indices_list[1]
+
+    non_pruned_in = non_pruned_indices_list[0]
+    non_pruned_out = non_pruned_indices_list[1]
+
+    pruned_in_mapped = {}
+    pruned_out_mapped = {}
+    non_pruned_in_mapped = {}
+    non_pruned_out_mapped = {}
+
+    for layer_name, layer in model.named_modules():
+
+        if not isinstance(layer, (nn.Linear, nn.LayerNorm, nn.Conv2d)):
+            continue
+
+        if layer_name not in (pruned_out.keys() | pruned_in.keys()):
+            print(f"Warning: Layer '{layer_name}' not found in the Pruning Metadata")
+            continue
+
+        if not hasattr(layer, 'weight'):
+            continue
+
+        weight = layer.weight.data
+
+        pruned_weights = pruned_weights_dict[layer_name]
+        non_pruned_weights = non_pruned_weights_dict[layer_name]
+
+        if layer_name == 'classifier':
+            pruned_dim1, non_pruned_dim1, _ = merge_and_remap_indices(pruned_in[layer_name], non_pruned_in[layer_name])
+
+            weight[:, pruned_dim1] = torch.tensor(pruned_weights["Weight"], device=device)
+            weight[:, non_pruned_dim1] = torch.tensor(non_pruned_weights["Weight"], device=device)
+            
+            pruned_in_mapped[layer_name] = pruned_dim1
+            non_pruned_in_mapped[layer_name] = non_pruned_dim1
+
+        elif isinstance(layer, nn.Linear):
+            pruned_dim0, non_pruned_dim0, _ = merge_and_remap_indices(pruned_out[layer_name], non_pruned_out[layer_name])
+            pruned_dim1, non_pruned_dim1, _ = merge_and_remap_indices(pruned_in[layer_name], non_pruned_in[layer_name])
+
+            weight[torch.tensor(pruned_dim0)[:, None], torch.tensor(pruned_dim1)] = torch.tensor(pruned_weights["Weight"], device=device)
+            weight[torch.tensor(non_pruned_dim0)[:, None], torch.tensor(non_pruned_dim1)] = torch.tensor(non_pruned_weights["Weight"], device=device)
+
+            pruned_out_mapped[layer_name] = pruned_dim0
+            non_pruned_out_mapped[layer_name] = non_pruned_dim0
+            pruned_in_mapped[layer_name] = pruned_dim1
+            non_pruned_in_mapped[layer_name] = non_pruned_dim1
+
+        elif isinstance(layer, (nn.LayerNorm, nn.Conv2d)):
+
+            if layer_name == "vit.embeddings.patch_embeddings.projection":
+                print(layer_name)
+                print(layer.weight.shape)
+
+                print("Old Indexing")
+                print(pruned_out[layer_name])
+                print(non_pruned_out[layer_name])
+
+            pruned_dim0, non_pruned_dim0, _ = merge_and_remap_indices(pruned_out[layer_name], non_pruned_out[layer_name])
+
+            if layer_name == "vit.embeddings.patch_embeddings.projection":
+                print("New Indexing")
+                print(pruned_dim0)
+                print(non_pruned_dim0)
+
+                
+                print("index size:", len(pruned_dim0))
+                print("weight size:", pruned_weights["Weight"].shape)
+
+                print("non pruned index size", len(non_pruned_dim0))
+                print("non pruned weight size", non_pruned_weights["Weight"].shape)
+
+            weight[torch.tensor(pruned_dim0)] = torch.tensor(pruned_weights["Weight"], device=device)
+            weight[torch.tensor(non_pruned_dim0)] = torch.tensor(non_pruned_weights["Weight"], device=device)
+
+            pruned_out_mapped[layer_name] = pruned_dim0
+            non_pruned_out_mapped[layer_name] = non_pruned_dim0
+
+
+        if include_bias and layer.bias is not None:
+            if layer_name == 'classifier':
+                layer.bias.data = torch.tensor(non_pruned_weights["Bias"], device=device)
+            else:
+                bias = layer.bias.data
+                bias[torch.tensor(pruned_dim0)] = torch.tensor(pruned_weights["Bias"], device=device)
+                bias[torch.tensor(non_pruned_dim0)] = torch.tensor(non_pruned_weights["Bias"], device=device)
+
+    return model, [pruned_in_mapped, pruned_out_mapped], [non_pruned_in_mapped, non_pruned_out_mapped]
+
+
 
 def zero_out_gradients(model, in_indices, out_indices):
 
@@ -958,7 +1093,7 @@ def zero_out_gradients_v3(model, in_indices, out_indices, device='cuda' if torch
                 if layer.bias is not None:
                     layer.bias.grad[freeze_dim0] = 0
 
-
+# FINAL FREEZING FUNCTION
 def freeze_partial_weights(model, in_indices, out_indices, device='cuda' if torch.cuda.is_available() else 'cpu'):
 
     for layer_name, layer in model.named_modules():
@@ -986,6 +1121,35 @@ def freeze_partial_weights(model, in_indices, out_indices, device='cuda' if torc
         elif isinstance(layer, nn.LayerNorm):
             freeze_dim0 = torch.tensor(out_indices[layer_name], dtype=torch.long, device=device)
             freeze_layernorm_params(layer, weight_indices=freeze_dim0)
+
+def freeze_partial_weights_global(model, in_indices, out_indices, device='cuda' if torch.cuda.is_available() else 'cpu'):
+
+    for layer_name, layer in model.named_modules():
+        
+        if not isinstance(layer, (nn.Linear, nn.LayerNorm, nn.Conv2d)):
+            continue
+        else:
+            if layer_name not in (in_indices.keys() | out_indices.keys()):
+                print(f"Warning: Layer '{layer_name}' not found in the Pruning Metadata")
+                continue
+
+        if 'classifier' in layer_name:
+            continue
+
+        elif isinstance(layer, nn.Linear):
+            # Get frozen indices
+            freeze_dim0 = torch.tensor(out_indices[layer_name], dtype=torch.long, device=device)  # dim 0 indices
+            freeze_dim1 = torch.tensor(in_indices[layer_name], dtype=torch.long, device=device)   # dim 1 indices
+            freeze_linear_params(layer, weight_indices={'dim0': freeze_dim0, 'dim1': freeze_dim1})
+
+        elif isinstance(layer, nn.Conv2d):
+            freeze_dim0 = torch.tensor(out_indices[layer_name], dtype=torch.long, device=device)
+            freeze_conv2d_params(layer, weight_indices=freeze_dim0)
+
+        elif isinstance(layer, nn.LayerNorm):
+            freeze_dim0 = torch.tensor(out_indices[layer_name], dtype=torch.long, device=device)
+            freeze_layernorm_params(layer, weight_indices=freeze_dim0)
+
 
 def change_module_name(pruning_dict):
     new_dict = {}
@@ -1117,10 +1281,7 @@ def selective_gradient_clipping_norm(model, exclude_indices_dim0, exclude_indice
 
 
 
-def plot_comparison(accuracy, macs, pruning_ratio, name=None):
-
-    # Data (replace with your values)
-    x_labels = ["Original", "Pruned", "Rebuilt"]
+def plot_comparison(accuracy, macs, pruning_ratio, x_labels=["Original", "Pruned", "Rebuilt"], name=None):
     
     x = np.arange(len(x_labels))  # X-axis positions
 

@@ -83,21 +83,23 @@ def train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criteri
             if args.clip_grad_norm is not None:
                 # we should unscale the gradients of optimizer's assigned params if do gradient clipping
                 scaler.unscale_(optimizer)
-                selective_gradient_clipping_norm(model.module, out_freeze_indices, in_freeze_indices, args.clip_grad_norm, device)
-
-            # zero_out_gradients_v2(model, optimizer, in_freeze_indices, out_freeze_indices)
-            # zero_out_gradients_v3(model, in_freeze_indices, out_freeze_indices)
+                if args.distributed:
+                    selective_gradient_clipping_norm(model.module, out_freeze_indices, in_freeze_indices, args.clip_grad_norm, device)
+                else:
+                    selective_gradient_clipping_norm(model, out_freeze_indices, in_freeze_indices, args.clip_grad_norm, device)
             
             scaler.step(optimizer)
             scaler.update()
         
         else:
             loss.backward()
-            # zero_out_gradients_v2(model, optimizer, in_freeze_indices, out_freeze_indices)
-            # zero_out_gradients_v3(model, in_freeze_indices, out_freeze_indices) 
             
             if args.clip_grad_norm is not None:
-                selective_gradient_clipping_norm(model.module, out_freeze_indices, in_freeze_indices, args.clip_grad_norm, device)
+                if args.distributed:
+                    selective_gradient_clipping_norm(model.module, out_freeze_indices, in_freeze_indices, args.clip_grad_norm, device)
+                else:
+                    selective_gradient_clipping_norm(model, out_freeze_indices, in_freeze_indices, args.clip_grad_norm, device)
+
             optimizer.step()
 
         if model_ema and i % args.model_ema_steps == 0:
