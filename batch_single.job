@@ -3,13 +3,14 @@
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
 #SBATCH --job-name=simple
-#SBATCH --account=all6000users
-#SBATCH --partition=all6000
+#SBATCH --partition=all
 #SBATCH --gres=gpu:1
 #SBATCH --mem=128G
 #SBATCH --cpus-per-task=16
+#SBATCH --constraint="3090|A5000|titan_rtx"         # Request Specific GPUs (modify if needed)
 #SBATCH --output=./outputs/slurm_output_%A.out
 #SBATCH --exclude=ivi-cn005,ivi-cn009,ivi-cn010,ivi-cn011,ivi-cn012,ivi-cn001
+#SBATCH --export=ALL,WANDB_API_KEY=dfcd2574507b9ebe69ca13ab6f6925d864e82ee0
 
 echo "TX Adaptivity Experiments"
 echo | date
@@ -21,40 +22,34 @@ echo -n nproc=; nproc
 eval "$(conda shell.bash hook)"
 conda activate prune_llm
 
+# Distributed Training Setup (if using DDP)
+export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
+export MASTER_PORT=$((15000 + RANDOM % 5000))  # Use random port
+export WORLD_SIZE=$SLURM_NTASKS
+export RANK=$SLURM_PROCID
+export LOCAL_RANK=$SLURM_LOCALID
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 nvidia-smi
 
 # srun python datasets.py
-# srun python compare_tensor.py
-export CUDA_LAUNCH_BLOCKING=1
+srun python compare_tensor.py
 
-srun python ViT_iterative_adaptivity.py \
-    --exp_name ViT_Iter_Adaptivity_test \
-    --model_name google/vit-base-patch16-224 \
-    --pruning_type l1 \
-    --pruning_ratio 0.6 \
-    --iterative --pruning_steps 3 \
-    --taylor_batchs 10 \
-    --data_path /ssdstore/ImageNet/ \
-    --train_batch_size 64 \
-    --val_batch_size 64 \
-    --test_accuracy \
-    --rebuild \
-    --epochs 1 \
-    --clip-grad-norm 1 --amp --ra-sampler \
-    --debug \
-
-# srun python ViT_adaptivity.py \
-#     --exp_name ViT_Adaptivity_selective_clipping \
+# export CUDA_LAUNCH_BLOCKING=1
+# srun python ViT_iterative_adaptivity.py \
+#     --exp_name ViT_Iter_Adaptivity_imagenette \
 #     --model_name google/vit-base-patch16-224 \
 #     --pruning_type l1 \
-#     --pruning_ratio 0.25 \
+#     --pruning_ratio 0.6 \
+#     --iterative --pruning_steps 3 \
 #     --taylor_batchs 10 \
 #     --data_path /ssdstore/ImageNet/ \
 #     --train_batch_size 64 \
 #     --val_batch_size 64 \
+#     --save_as saves/state_dicts/ \
 #     --test_accuracy \
 #     --rebuild \
-#     --epochs 1 \
+#     --epochs 2 \
 #     --clip-grad-norm 1 --amp --ra-sampler \
 #     --debug \
 

@@ -495,7 +495,33 @@ def get_layer_size(state_dict):
 
     return vit_hidden_info
 
-def get_vit_info(pruned_weights, non_pruned_weights, num_heads=12):
+def get_num_heads(hidden_dim, possible_heads=[6, 8, 10, 12]):
+    """
+    Determines the maximum suitable number of heads based on the hidden dimension.
+
+    Args:
+        hidden_dim (int): The hidden dimension after pruning.
+        possible_heads (list): List of possible head values to check.
+
+    Returns:
+        int: The maximum valid number of heads.
+    """
+    # Find valid heads that divide hidden_dim evenly
+    valid_heads = [h for h in possible_heads if hidden_dim % h == 0]
+
+    if not valid_heads:
+        raise ValueError(
+            f"No suitable head count found for hidden_dim {hidden_dim}. "
+            f"Hidden_dim must be divisible by one of {possible_heads}."
+        )
+
+    # Choose the maximum valid head count
+    max_heads = max(valid_heads)
+    print(f"All Head dim: {hidden_dim}, Valid heads: {valid_heads}, Selected heads: {max_heads}")
+
+    return max_heads
+
+def get_vit_info(pruned_weights=None, non_pruned_weights=None, num_heads=None, core_model=False):
     """
     Extracts the embedding size from a dictionary containing non-pruned weights.
 
@@ -511,6 +537,25 @@ def get_vit_info(pruned_weights, non_pruned_weights, num_heads=12):
     #     print(layer_name)
     #     print(layer_weights["Weight"].shape)
     #     print(layer_weights["Bias"].shape)
+    if core_model:
+        for layer_name, layer_weights in non_pruned_weights.items():
+
+            if "vit.embeddings.patch_embeddings.projection.weight" in layer_name:
+                vit_info["Embed_Dim"] = layer_weights.shape[0] 
+
+            if "vit.encoder.layer.0.attention.attention.query.weight" in layer_name:
+                vit_info["QKV_Dim_out"] = layer_weights.shape[0] 
+                vit_info["QKV_Dim_in"] = layer_weights.shape[1]
+                
+            if "vit.encoder.layer.0.intermediate.dense.weight" in layer_name:
+                vit_info["FFN_Intermediate_Dim"] = layer_weights.shape[0] 
+
+            if "vit.encoder.layer.0.output.dense.weight" in layer_name:
+                vit_info["FFN_Output_Dim"] = layer_weights.shape[0] 
+
+        vit_info["num_layers"] = max(int(key.split(".")[3]) for key in non_pruned_weights if key.startswith("vit.encoder.layer")) + 1
+        vit_info["num_heads"] = get_num_heads(vit_info["QKV_Dim_out"])
+        return vit_info
 
     for layer_name, layer_weights in non_pruned_weights.items():
 
@@ -528,7 +573,7 @@ def get_vit_info(pruned_weights, non_pruned_weights, num_heads=12):
             vit_info["FFN_Output_Dim"] = layer_weights["Weight"].shape[0] + pruned_weights[layer_name]["Weight"].shape[0]
 
     vit_info["num_layers"] = max(int(key.split(".")[3]) for key in non_pruned_weights if key.startswith("vit.encoder.layer")) + 1
-    vit_info["num_heads"] = num_heads
+    vit_info["num_heads"] = get_num_heads(vit_info["QKV_Dim_out"])
     return vit_info
 
 def extract_vit_weight_subset(model, out_indices_dict, in_indices_dict):
@@ -565,15 +610,12 @@ def extract_vit_weight_subset(model, out_indices_dict, in_indices_dict):
             bias = layer.bias if layer.bias is not None else None
 
             out_indices = torch.tensor(out_indices_dict[layer_name], dtype=torch.long)
-            # print("Index pruned:", len(out_indices))
-            # print(out_indices)
 
             # Store subset
             selected_weights[layer_name] = {
                 "Weight": weight[out_indices].detach().cpu().numpy(),
                 "Bias": bias[out_indices].detach().cpu().numpy() if bias is not None else None
             }
-            # print("Weight pruned:", selected_weights[layer_name]["Weight"].shape)
 
         elif isinstance(layer, torch.nn.Linear):
             weight = layer.weight  # Shape: (out_dim, in_dim)
@@ -873,27 +915,7 @@ def update_vit_weights_global(model, pruned_indices_list, non_pruned_indices_lis
 
         elif isinstance(layer, (nn.LayerNorm, nn.Conv2d)):
 
-            if layer_name == "vit.embeddings.patch_embeddings.projection":
-                print(layer_name)
-                print(layer.weight.shape)
-
-                print("Old Indexing")
-                print(pruned_out[layer_name])
-                print(non_pruned_out[layer_name])
-
             pruned_dim0, non_pruned_dim0, _ = merge_and_remap_indices(pruned_out[layer_name], non_pruned_out[layer_name])
-
-            if layer_name == "vit.embeddings.patch_embeddings.projection":
-                print("New Indexing")
-                print(pruned_dim0)
-                print(non_pruned_dim0)
-
-                
-                print("index size:", len(pruned_dim0))
-                print("weight size:", pruned_weights["Weight"].shape)
-
-                print("non pruned index size", len(non_pruned_dim0))
-                print("non pruned weight size", non_pruned_weights["Weight"].shape)
 
             weight[torch.tensor(pruned_dim0)] = torch.tensor(pruned_weights["Weight"], device=device)
             weight[torch.tensor(non_pruned_dim0)] = torch.tensor(non_pruned_weights["Weight"], device=device)
@@ -1122,34 +1144,6 @@ def freeze_partial_weights(model, in_indices, out_indices, device='cuda' if torc
             freeze_dim0 = torch.tensor(out_indices[layer_name], dtype=torch.long, device=device)
             freeze_layernorm_params(layer, weight_indices=freeze_dim0)
 
-def freeze_partial_weights_global(model, in_indices, out_indices, device='cuda' if torch.cuda.is_available() else 'cpu'):
-
-    for layer_name, layer in model.named_modules():
-        
-        if not isinstance(layer, (nn.Linear, nn.LayerNorm, nn.Conv2d)):
-            continue
-        else:
-            if layer_name not in (in_indices.keys() | out_indices.keys()):
-                print(f"Warning: Layer '{layer_name}' not found in the Pruning Metadata")
-                continue
-
-        if 'classifier' in layer_name:
-            continue
-
-        elif isinstance(layer, nn.Linear):
-            # Get frozen indices
-            freeze_dim0 = torch.tensor(out_indices[layer_name], dtype=torch.long, device=device)  # dim 0 indices
-            freeze_dim1 = torch.tensor(in_indices[layer_name], dtype=torch.long, device=device)   # dim 1 indices
-            freeze_linear_params(layer, weight_indices={'dim0': freeze_dim0, 'dim1': freeze_dim1})
-
-        elif isinstance(layer, nn.Conv2d):
-            freeze_dim0 = torch.tensor(out_indices[layer_name], dtype=torch.long, device=device)
-            freeze_conv2d_params(layer, weight_indices=freeze_dim0)
-
-        elif isinstance(layer, nn.LayerNorm):
-            freeze_dim0 = torch.tensor(out_indices[layer_name], dtype=torch.long, device=device)
-            freeze_layernorm_params(layer, weight_indices=freeze_dim0)
-
 
 def change_module_name(pruning_dict):
     new_dict = {}
@@ -1280,7 +1274,6 @@ def selective_gradient_clipping_norm(model, exclude_indices_dim0, exclude_indice
     #         print(layer.weight.grad[exclude_dim0[:, None], exclude_dim1].sum() == original_weight_grads[layer_name].sum())
 
 
-
 def plot_comparison(accuracy, macs, pruning_ratio, x_labels=["Original", "Pruned", "Rebuilt"], name=None):
     
     x = np.arange(len(x_labels))  # X-axis positions
@@ -1345,3 +1338,13 @@ def plot_tensor(tensor, title="Tensor Plot", cmap='viridis', figsize=(6, 4)):
     
     plt.title(title)
     plt.savefig(f"./saves/plots/{title}.png")
+
+
+# def replace_all_vit_attention_blocks(model, out_dim, num_heads=None):
+#     model.config.num_attention_heads = num_heads
+#     new_attn = PrunedViTSelfAttention(model.config, out_dim)
+#     for id, block in enumerate(model.modules()):
+#         if isinstance(block, ViTSelfAttention):
+#             print(f"Replacing ViT Self Attention Block: {id}")
+#             block = new_attn
+#     return model

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-from ViT_adaptivity import create_vit_general 
+from ViT_iterative_adaptivity import create_vit_general 
+from prune_utils import get_vit_info
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Running on device:", device)
@@ -69,9 +70,48 @@ def compare_weights(sample_layer="vit.encoder.layer.0.attention.attention.key"):
                 print("")
 
 
+def compare_weights_multilevel(model_paths, prune_steps=3):
+    """
+    Compare weights between multiple versions (levels) of ViT models.
+    model_paths: List of paths to state_dicts [level1, level2, level3, level4]
+    """
+    models = []
+    state_dicts = [torch.load(p, map_location=device) for p in model_paths]
+
+    print(state_dicts[0].keys())
+    print(state_dicts[0]['vit.encoder.layer.1.attention.attention.query.weight'].shape)
+    print(state_dicts[0]['vit.encoder.layer.1.intermediate.dense.weight'].shape)
+
+    for sd in state_dicts:
+        # Extract model innformation from state dict
+        model_info = get_vit_info(non_pruned_weights=sd, core_model=True)
+        model = create_vit_general(dim_dict=model_info)
+        models.append(model)
+    
+    for model, state in zip(models, state_dicts):
+        model.load_state_dict(state)
+        model.eval()
+
+    # Compare each level with the next: 1->2, 2->3, 3->4
+    for i in range(prune_steps):
+        print(f"\n🔍 Comparing Level {i+2} ➡️ Level {i+1}")
+        for name, layer in models[i+1].named_modules():
+            if isinstance(layer, (nn.Linear, nn.LayerNorm, nn.Conv2d)):
+                layer_core = dict(models[i].named_modules()).get(name)
+                if layer_core is not None:
+                    print(f"Checking overlap for layer: {name}")
+                    check_overlap(layer.weight.data, layer_core.weight.data)
+                    print("")
+
+
+
      
 if __name__ == '__main__':
-    compare_weights()
+    paths = ["./saves/state_dicts/Vit_b_16_Core_Level_1_state_dict_ViT_Iter_Adaptivity_imagenette.pth"] + \
+            [f"./saves/state_dicts/Vit_b_16_Rebuilt_Level_{i}_state_dict_ViT_Iter_Adaptivity_imagenette.pth" for i in range(2,5)]
+    compare_weights_multilevel(paths, prune_steps=3)
+    
+    # compare_weights()
     
     # cls_token =  nn.Parameter(torch.randn(1, 1, 768))
     # pos_embed = nn.Parameter(torch.randn(1, 196 + 1, 768))

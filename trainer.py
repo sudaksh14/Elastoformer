@@ -427,13 +427,13 @@ def fine_tuner(args, device, model, data_loader, data_loader_test, train_sampler
             if utils.get_rank() == 0:
                 wandb.init(
                     project="ViT-ImageNet-Adaptivity",
-                    name=f"{args.model_name}_Pruning_{args.pruning_type}_{args.pruning_ratio}",
+                    name=f"{args.exp_name}_Pruning_{args.pruning_type}_{args.pruning_ratio}",
                     config=vars(args)  # <--- Converts argparse.Namespace to dict!
                 )
         else:
             wandb.init(
                 project="ViT-ImageNet-Adaptivity",
-                name=f"{args.model_name}_Pruning_{args.pruning_type}_{args.pruning_ratio}",
+                name=f"{args.exp_name}_Pruning_{args.pruning_type}_{args.pruning_ratio}",
                 config=vars(args)  # <--- Converts argparse.Namespace to dict!
             )
 

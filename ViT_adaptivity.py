@@ -386,7 +386,7 @@ def compare_performance(args):
     plot_comparison(accuracy=[orig_acc, pruned_acc, rebuilt_acc], macs=[base_macs, pruned_macs, rebuilt_macs], pruning_ratio=args.pruning_ratio)
     print("Plotting Complete")
 
-
+######################################################################## MAIN STARTS ###########################################################################
 
 def main(args):
 

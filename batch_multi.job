@@ -10,9 +10,10 @@
 #SBATCH --constraint="3090|A5000|titan_rtx"         # Request Specific GPUs (modify if needed)
 #SBATCH --output=./outputs/slurm_output_%A.out
 #SBATCH --exclude=ivi-cn005,ivi-cn009,ivi-cn010,ivi-cn011,ivi-cn012,ivi-cn001
+#SBATCH --nodelist=ivi-cn003,ivi-cn016
 #SBATCH --export=ALL,WANDB_API_KEY=dfcd2574507b9ebe69ca13ab6f6925d864e82ee0
 
-echo "ViT Adaptivity 1-level 100k train samples 10k val samples"
+echo "ViT Iterative Adaptivity 4-level Full Imagenet-1k Dataset"
 echo | date
 echo "Node name: $(hostname)"
 echo -n memory=; ulimit -m
@@ -29,10 +30,11 @@ export WORLD_SIZE=$SLURM_NTASKS
 export RANK=$SLURM_PROCID
 export LOCAL_RANK=$SLURM_LOCALID
 
+
 nvidia-smi
 
 srun python ViT_iterative_adaptivity.py \
-    --exp_name ViT_Iter_Adaptivity_test \
+    --exp_name ViT_Iter_Adaptivity_imagenet_1k \
     --model_name google/vit-base-patch16-224 \
     --pruning_type l1 \
     --pruning_ratio 0.6 \
@@ -44,7 +46,7 @@ srun python ViT_iterative_adaptivity.py \
     --save_as saves/state_dicts/ \
     --test_accuracy \
     --rebuild \
-    --epochs 50 \
+    --epochs 20 \
     --distributed --model-ema \
     --clip-grad-norm 1 --amp --ra-sampler \
     --log_wandb
@@ -66,24 +68,6 @@ srun python ViT_iterative_adaptivity.py \
 #     --distributed --model-ema \
 #     --clip-grad-norm 1 --amp --ra-sampler \
 #     --log_wandb
-
-
-# CUDA_LAUNCH_BLOCKING=1 srun python ViT_adaptivity.py \
-#     --exp_name Freezing_Debug \
-#     --model_name google/vit-base-patch16-224 \
-#     --pruning_type l1 \
-#     --pruning_ratio 0.25 \
-#     --taylor_batchs 10 \
-#     --data_path /ssdstore/ImageNet/ \
-#     --train_batch_size 128 \
-#     --val_batch_size 128 \
-#     --save_as saves/state_dicts/ \
-#     --test_accuracy \
-#     --rebuild \
-#     --epochs 2 \
-#     --distributed --model-ema \
-#     --clip-grad-norm 1 --amp --ra-sampler \
-#     --debug \
 
 echo "Job Complete"
 echo | date

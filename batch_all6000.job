@@ -1,0 +1,72 @@
+#!/bin/bash
+#SBATCH -t 165:00:00
+#SBATCH --ntasks=1
+#SBATCH --nodes=1
+#SBATCH --job-name=simple
+#SBATCH --account=all6000users
+#SBATCH --partition=all6000
+#SBATCH --gres=gpu:1
+#SBATCH --mem=128G
+#SBATCH --cpus-per-task=16
+#SBATCH --output=./outputs/slurm_output_%A.out
+#SBATCH --exclude=ivi-cn005,ivi-cn009,ivi-cn010,ivi-cn011,ivi-cn012,ivi-cn001
+#SBATCH --export=ALL,WANDB_API_KEY=dfcd2574507b9ebe69ca13ab6f6925d864e82ee0
+
+echo "TX Adaptivity Experiments"
+echo | date
+echo "Node name: $(hostname)"
+echo -n memory=; ulimit -m
+echo -n nproc=; nproc
+
+# Initialize Conda and activate environment
+eval "$(conda shell.bash hook)"
+conda activate prune_llm
+
+# Distributed Training Setup (if using DDP)
+export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
+export MASTER_PORT=$((15000 + RANDOM % 5000))  # Use random port
+export WORLD_SIZE=$SLURM_NTASKS
+export RANK=$SLURM_PROCID
+export LOCAL_RANK=$SLURM_LOCALID
+
+nvidia-smi
+srun python compare_tensor.py
+
+# export CUDA_LAUNCH_BLOCKING=1
+# srun python ViT_iterative_adaptivity.py \
+#     --exp_name ViT_Iter_Adaptivity_test_Imagenette \
+#     --model_name google/vit-base-patch16-224 \
+#     --pruning_type l1 \
+#     --pruning_ratio 0.6 \
+#     --iterative --pruning_steps 3 \
+#     --taylor_batchs 10 \
+#     --data_path /nvmestore/koelma/pytorch_work/ilsvrc2012/ \
+#     --train_batch_size 128 \
+#     --val_batch_size 128 \
+#     --test_accuracy \
+#     --rebuild \
+#     --epochs 1 \
+#     --clip-grad-norm 1 --amp --ra-sampler \
+#     --debug \
+
+# srun python ViT_iterative_adaptivity.py \
+#     --exp_name ViT_Iter_Adaptivity_trial_exp \
+#     --model_name google/vit-base-patch16-224 \
+#     --pruning_type l1 \
+#     --pruning_ratio 0.6 \
+#     --iterative --pruning_steps 3 \
+#     --taylor_batchs 10 \
+#     --data_path  /nvmestore/koelma/pytorch_work/ilsvrc2012/ \
+#     --train_batch_size 128 \
+#     --val_batch_size 128 \
+#     --save_as saves/state_dicts/ \
+#     --test_accuracy \
+#     --rebuild \
+#     --epochs 10 \
+#     --distributed --model-ema \
+#     --clip-grad-norm 1 --amp --ra-sampler \
+#     --log_wandb
+
+
+echo "Job Complete"
+echo | date

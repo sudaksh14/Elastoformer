@@ -4,8 +4,7 @@ from typing import Dict, List, Optional, Set, Tuple, Union
 import torch
 import torch.nn.functional as F
 import torch_pruning as tp
-from transformers import ViTForImageClassification, ViTModel, ViTConfig
-from transformers.models.vit.modeling_vit import ViTSelfAttention, ViTSelfOutput, ViTLayer
+from transformers.models.vit.modeling_vit_pruned import PrunedViTSelfAttention, ViTSelfOutput, ViTLayer, ViTForImageClassification, ViTModel, ViTConfig
 import transformers
 import warnings
 from torchvision.datasets import ImageFolder
@@ -21,9 +20,10 @@ from prune_utils import *
 from trainer import fine_tuner, evaluate
 from sampler import RASampler
 import utils
-
+import math
 import argparse
 
+torch.manual_seed(42)
 
 def get_args_parser(add_help=True):
 
@@ -225,8 +225,8 @@ def prepare_imagenet(imagenet_root, train_batch_size=64, val_batch_size=128, num
         train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:500])
         val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:100])
     # else:
-        train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:100000])
-        val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:10000])
+        # train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:100000])
+        # val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:10000])
 
     if args.distributed:    
         if hasattr(args, "ra_sampler") and args.ra_sampler:
@@ -260,38 +260,6 @@ def validate_model(model, val_loader, device, hf=True):
             correct += (predicted == labels).sum().item()
     return correct / len(val_loader.dataset), loss / len(val_loader.dataset)
 
-def forward(
-        self,
-        hidden_states: torch.Tensor,
-        head_mask: Optional[torch.Tensor] = None,
-        output_attentions: bool = False,
-    ) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor]]:
-        self_attention_outputs = self.attention(
-            self.layernorm_before(hidden_states),  # in ViT, layernorm is applied before self-attention
-            head_mask,
-            output_attentions=output_attentions,
-        )
-
-        attention_output = self_attention_outputs[0]
-        print("attention outputs: ", attention_output.shape)
-        outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
-
-        # first residual connection
-        hidden_states = attention_output + hidden_states
-
-        # in ViT, layernorm is also applied after self-attention
-        layer_output = self.layernorm_after(hidden_states)
-        layer_output = self.intermediate(layer_output)
-        print("FF1 outputs: ", layer_output.shape)
-
-        # second residual connection is done here
-        layer_output = self.output(layer_output, hidden_states)
-        print("FF2 outputs: ", layer_output.shape)
-
-        outputs = (layer_output,) + outputs
-
-        return outputs
-
 def create_vit_general(img_size=(224,224), patch_size=(16,16), in_channels=3, embed_dim=768, num_layers=12, num_heads=12, 
                   qkv_dim=768, ff_hidden_dim=3072, output_dim=768, num_classes=1000, dim_dict=None):
     """
@@ -318,8 +286,9 @@ def create_vit_general(img_size=(224,224), patch_size=(16,16), in_channels=3, em
         num_layers = dim_dict["num_layers"]
         num_heads = dim_dict['num_heads']
         ff_hidden_dim = dim_dict["FFN_Intermediate_Dim"]
-        qkv_dim = embed_dim
-        output_dim = dim_dict["FFN_Output_Dim"]
+        ff_output_dim = dim_dict["FFN_Output_Dim"]
+        qkv_dim = dim_dict["QKV_Dim_out"]
+
 
     config = ViTConfig(
         image_size=img_size,
@@ -332,10 +301,12 @@ def create_vit_general(img_size=(224,224), patch_size=(16,16), in_channels=3, em
         qkv_bias=True,  # Include biases for Q, K, V
         hidden_dropout_prob=0,
         attention_probs_dropout_prob=0,
-        num_labels=num_classes,
+        num_labels=num_classes, 
     )
 
+    config.pruned_dim = qkv_dim
     model = ViTForImageClassification(config)
+    # model = replace_all_vit_attention_blocks(model, out_dim=qkv_dim)
     return model
 
 def compare_performance(args):
@@ -406,12 +377,21 @@ def prepare_imagenette(path="../Datasets/data/imagenette2-160", train_batch_size
     train_dataset = ImageFolder(root=train_dir, transform=train_transforms)
     val_dataset = ImageFolder(root=val_dir, transform=val_transforms)
 
+    if args.distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False)
+
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
     print(train_dataset.classes)
 
-    return train_loader, val_loader, None, None
+    if args.distributed:
+        return train_loader, val_loader, train_sampler, val_sampler
+    else:
+        return train_loader, val_loader, None, None
 
+
+######################################################################## MAIN STARTS ###########################################################################
 
 def main(args):
 
@@ -442,6 +422,10 @@ def main(args):
 
     # Load the model
     model = ViTForImageClassification.from_pretrained(args.model_name).to(device)
+
+    # Fine-Tune the Orignal Model (ONLY FOR IMAGENETTE)
+    # fine_tuner(args, device, model, train_loader, val_loader, train_sampler, val_sampler)
+    
     orig_copy = deepcopy(model)
 
     orig_statedict = orig_copy.state_dict()
@@ -459,13 +443,10 @@ def main(args):
 
     print("Pruning %s..."%args.model_name)
     num_heads = {}
-    # ignored_layers = [model.vit.embeddings, model.classifier]
     ignored_layers = [model.classifier]
     # All heads should be pruned simultaneously, so we group channels by head.
     for m in model.modules():
-        # if isinstance(m, ViTLayer):
-        #     m.forward = forward.__get__(m, transformers.models.vit.modeling_vit.ViTLayer)
-        if isinstance(m, ViTSelfAttention):
+        if isinstance(m, PrunedViTSelfAttention):
             num_heads[m.query] = m.num_attention_heads
             num_heads[m.key] = m.num_attention_heads
             num_heads[m.value] = m.num_attention_heads
@@ -475,7 +456,7 @@ def main(args):
     pruner = tp.pruner.BasePruner(
                 model, 
                 example_inputs,
-                isomorphic=args.isomorphic, 
+                isomorphic=args.isomorphic,
                 global_pruning=args.global_pruning, # If False, a uniform pruning ratio will be assigned to different layers.
                 importance=imp, # importance criterion for parameter selection
                 iterative_steps=args.pruning_steps, # number of pruning steps
@@ -611,6 +592,12 @@ def main(args):
         pruned_weights_recorder[f"Level_{args.pruning_steps + 1 - i}"] = pruned_weights
 
         # Saving Non-Pruned metadata
+        # print(f"Non-Pruned Indices Metadata for Level-{args.pruning_steps + 1 - i}")
+        # for key, value in non_pruned_index_out[i].items():
+        #     print(key)
+        #     print("# Non-Pruned Index Dim0:", len(value))
+        #     if key in non_pruned_index_in[i]:
+        #         print("# Non-Pruned Index Dim1:", len(non_pruned_index_in[i][key]))
         non_pruned_weights = extract_vit_weight_subset(orig_copy, non_pruned_index_out[i], non_pruned_index_in[i])
         with open(f"./saves/pruning_metadata/non_pruned_ViT_weights_Level_{args.pruning_steps + 1 - i}.txt", "w") as file:
             for key, value in non_pruned_weights.items():
@@ -681,12 +668,19 @@ def main(args):
     ############################################################################################################
 
     # Modify the attention head size and all head size after pruning
+    # print(model)
+    # for name, layer in model.named_modules():
+    #     if isinstance(layer, (nn.Linear, nn.Conv2d)):
+    #         print(name)
+    #         print(layer.weight.shape)
+    model_info = get_vit_info(non_pruned_weights=model.state_dict(), num_heads=orig_copy.config.num_attention_heads, core_model=True)
+    print("Model Info:", model_info)
+    # model = replace_all_vit_attention_blocks(model, out_dim=model_info["QKV_Dim_out"], num_heads=model_info["num_heads"])
+
     for id, m in enumerate(model.modules()):
-        if isinstance(m, ViTSelfAttention):
-            print("Layer:", id)
+        if isinstance(m, transformers.models.vit.modeling_vit_pruned.PrunedViTSelfAttention):
             print("num_heads:", m.num_attention_heads, 'head_dims:', m.attention_head_size, 'all_head_size:', m.all_head_size, '=>')
-            # m.num_attention_heads = pruner.num_heads[m.query]
-            m.num_attention_heads = 8
+            m.num_attention_heads = model_info["num_heads"]
             m.attention_head_size = m.query.out_features // m.num_attention_heads
             m.all_head_size = m.query.out_features
             print("num_heads:", m.num_attention_heads, 'head_dims:', m.attention_head_size, 'all_head_size:', m.all_head_size)
@@ -699,7 +693,8 @@ def main(args):
     with open(f"./saves/pruning_metadata/non_pruned_ViT_weights_Level_2.txt", "w") as file:
         for key, value in core_weights.items():
             file.write(f"  {key}: {value}\n")
-
+    non_pruned_weights_recorder["Level_2"] = core_weights
+    
     if args.test_accuracy:
         print("Testing accuracy of the pruned model...")
         acc_pruned, loss_pruned = evaluate(model, criterion, val_loader, device=device, dist=args.distributed)
@@ -708,7 +703,7 @@ def main(args):
     if args.save_as is not None:
         print("Saving the pruned model to %s..."%args.save_as)
         os.makedirs(os.path.dirname(args.save_as), exist_ok=True)
-        torch.save(model.state_dict(), f"{args.save_as}Vit_b_16_Pruned_Level_1_state_dict_{args.exp_name}.pth")
+        torch.save(model.state_dict(), f"{args.save_as}Vit_b_16_Core_Level_1_state_dict_{args.exp_name}.pth")
 
     print("----------------------------------------")
     print("Summary:")
@@ -730,17 +725,15 @@ def main(args):
 
             rebuilding_weights = non_pruned_weights_recorder[f"Level_{i+2}"]
             pruned_weights = pruned_weights_recorder[f"Level_{i+2}"]
-            # rebuild_dim = get_vit_info(rebuilding_weights, num_heads=orig_copy.config.num_attention_heads)
-            rebuild_dim = get_vit_info(pruned_weights, rebuilding_weights, num_heads=8)
+            rebuild_dim = get_vit_info(pruned_weights, rebuilding_weights)
             print(rebuild_dim)
             rebuilt_model = create_vit_general(dim_dict=rebuild_dim).to(device)
-            rebuilt_model, pruned_index_mapped, non_pruned_index_mapped = update_vit_weights_global(rebuilt_model, [pruned_index_in[args.pruning_steps-i-1], pruned_index_out[args.pruning_steps-i-1]], 
+            rebuilt_model,_,non_pruned_index_mapped = update_vit_weights_global(rebuilt_model, [pruned_index_in[args.pruning_steps-i-1], pruned_index_out[args.pruning_steps-i-1]], 
                                                [non_pruned_index_in[args.pruning_steps-i-1], non_pruned_index_out[args.pruning_steps-i-1]], 
                                                pruned_weights_recorder[f"Level_{i+2}"], non_pruned_weights_recorder[f"Level_{i+2}"], device=device)
             
             # partial freezing of grads for freezing the core weights
-            # freeze_partial_weights_global(rebuilt_model, non_pruned_index_in[i+1], non_pruned_index_out[i+1], device)
-            freeze_partial_weights_global(rebuilt_model, non_pruned_index_mapped[0], non_pruned_index_mapped[1], device)
+            freeze_partial_weights(rebuilt_model, non_pruned_index_mapped[0], non_pruned_index_mapped[1], device)
 
             # sample_layer = 'vit.encoder.layer.11.output.dense'
             # print("Layer Name:", sample_layer)
@@ -759,6 +752,15 @@ def main(args):
             # fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler)
             fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler, rebuild=True, in_freeze_indices=non_pruned_index_mapped[0], out_freeze_indices=non_pruned_index_mapped[1])
 
+            if i < args.pruning_steps - 1:
+                core_weights = extract_vit_core_weights(rebuilt_model)
+                with open(f"./saves/pruning_metadata/non_pruned_ViT_weights_Level_{i+3}.txt", "w") as file:
+                    for key, value in core_weights.items():
+                        file.write(f"  {key}: {value}\n")
+                non_pruned_weights_recorder[f"Level_{i+3}"] = core_weights
+                # DELETE UNUSED TENSORS TO FREE MEMORY
+                del core_weights
+
             # print("Layer Name:", sample_layer)
             # print("After Fine-Tune")
             # for layer_name, layer in rebuilt_model.named_modules():
@@ -771,7 +773,6 @@ def main(args):
             #         print(model.state_dict()[f"{layer_name}.weight"].sum())
             #         print(layer.weight[exclude_dim0[:, None], exclude_dim1] == model.state_dict()[f"{layer_name}.weight"].to(device))
 
-            
             if args.test_accuracy:
                 print("Testing accuracy of the rebuild model...")
                 acc_rebuilt, loss_rebuilt = evaluate(rebuilt_model, criterion, val_loader, device=device, dist=args.distributed)
@@ -791,9 +792,13 @@ def main(args):
             if args.test_accuracy:
                 print("Base Loss: %.4f, Pruned Loss: %.4f, Rebuilt Loss: %.4f"%(loss_ori, loss_pruned, loss_rebuilt))
                 print("Base Accuracy: %.4f, Pruned Accuracy: %.4f, Rebuilt Accuracy: %.4f"%(acc_ori, acc_pruned, acc_rebuilt))
+
+            # DELETE UNUSED TENSORS TO FREE MEMORY
+            del pruned_weights, rebuilding_weights
+            torch.cuda.empty_cache()
         
         
-        plot_comparison(accuracy=[acc_ori, acc_pruned, *acc_recorder], macs=[base_macs, pruned_macs, *macs_recorder], pruning_ratio=args.pruning_ratio, x_labels=["Original", "Level-1", "Level-2", "Level-3", "Level-4"], name=args.exp_name)
+        plot_comparison(accuracy=[acc_ori, acc_pruned, *acc_recorder], macs=[base_macs, pruned_macs, *macs_recorder], pruning_ratio=args.pruning_ratio, x_labels=(["Original"] + [f"Level-{i}" for i in range(1, args.pruning_steps+2)]), name=args.exp_name)
 
 
     

@@ -243,6 +243,94 @@ class ViTSelfAttention(nn.Module):
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 
         return outputs
+    
+class PrunedViTSelfAttention(nn.Module):
+    def __init__(self, config: ViTConfig) -> None:
+        super().__init__()
+        if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
+            raise ValueError(
+                f"The hidden size {config.hidden_size,} is not a multiple of the number of attention "
+                f"heads {config.num_attention_heads}."
+            )
+        
+        self.num_attention_heads = config.num_attention_heads
+        self.attention_head_size = config.pruned_dim // config.num_attention_heads
+        self.all_head_size = self.num_attention_heads * self.attention_head_size
+
+        self.query = nn.Linear(config.hidden_size, self.all_head_size, bias=config.qkv_bias)
+        self.key = nn.Linear(config.hidden_size, self.all_head_size, bias=config.qkv_bias)
+        self.value = nn.Linear(config.hidden_size, self.all_head_size, bias=config.qkv_bias)
+
+        self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
+
+    def transpose_for_scores(self, x: torch.Tensor, num_heads: int, head_dim: int) -> torch.Tensor:
+        # x shape: (batch, seq_len, all_head_size)
+        new_shape = x.size()[:-1] + (num_heads, head_dim)  # (B, T, h, d)
+        x = x.view(new_shape)
+        return x.permute(0, 2, 1, 3)  # (B, h, T, d)
+
+    def forward(
+        self, hidden_states, head_mask: Optional[torch.Tensor] = None, output_attentions: bool = False
+    ) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor]]:
+        
+        # Compute Q, K, V
+        query_layer = self.query(hidden_states)
+        key_layer = self.key(hidden_states)
+        value_layer = self.value(hidden_states)
+
+        # Transpose to shape (batch, heads, seq_len, head_dim)
+        query_layer = self.transpose_for_scores(query_layer, self.num_attention_heads, self.attention_head_size)
+        key_layer = self.transpose_for_scores(key_layer, self.num_attention_heads, self.attention_head_size)
+        value_layer = self.transpose_for_scores(value_layer, self.num_attention_heads, self.attention_head_size)
+
+        # Attention scores
+        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+        attention_scores = attention_scores / math.sqrt(self.attention_head_size)
+        attention_probs = nn.functional.softmax(attention_scores, dim=-1)
+        attention_probs = self.dropout(attention_probs)
+
+        # Mask heads if needed
+        if head_mask is not None:
+            attention_probs = attention_probs * head_mask
+
+        # Compute context
+        context_layer = torch.matmul(attention_probs, value_layer)  # (B, h, T, d)
+        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()  # (B, T, h, d)
+        new_shape = context_layer.size()[:-2] + (self.all_head_size,)  # (B, T, h*d)
+        context_layer = context_layer.view(new_shape)
+
+        outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
+        return outputs
+    
+class NonSquareViTSelfAttention(ViTSelfAttention):
+    def forward(self, hidden_states):
+        batch_size, seq_length, hidden_dim = hidden_states.shape
+
+        # Compute Queries, Keys, and Values
+        query_layer = self.query(hidden_states)  # [batch, seq_len, num_heads * head_dim]
+        key_layer = self.key(hidden_states)      # [batch, seq_len, num_heads * head_dim]
+        value_layer = self.value(hidden_states)  # [batch, seq_len, num_heads * head_dim]
+
+        # Reshape to split heads
+        query_layer = self.transpose_for_scores(query_layer)
+        key_layer = self.transpose_for_scores(key_layer)
+        value_layer = self.transpose_for_scores(value_layer)
+
+        # Simulating Non-Square Attention: Different Q and K sizes
+        key_layer = key_layer[:, :, :query_layer.shape[2], :]  # Adjust key length
+
+        # Compute Scaled Dot-Product Attention
+        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2)) / self.attention_probs_dropout_prob
+        attention_probs = nn.functional.softmax(attention_scores, dim=-1)
+        attention_probs = self.dropout(attention_probs)
+
+        # Apply attention to values
+        context_layer = torch.matmul(attention_probs, value_layer)
+        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
+        new_context_layer_shape = context_layer.size()[:-2] + (hidden_dim,)
+        context_layer = context_layer.view(*new_context_layer_shape)
+
+        return context_layer
 
 class GenericViTSelfAttention(nn.Module):
     def __init__(self, 
@@ -286,7 +374,7 @@ class GenericViTSelfAttention(nn.Module):
 
         # Compute Scaled Dot-Product Attention
         attention_scores = torch.matmul(q, k.transpose(-1, -2)) / (self.head_dim ** 0.5)
-        attention_probs = F.softmax(attention_scores, dim=-1)
+        attention_probs = nn.functional.softmax(attention_scores, dim=-1)
         attention_probs = self.dropout(attention_probs)
 
         # Apply attention to values
