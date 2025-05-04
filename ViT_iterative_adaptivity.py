@@ -67,6 +67,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--opt", default="adamw", type=str, help="optimizer")
     parser.add_argument("--lr", default=0.003, type=float, help="initial learning rate")
     parser.add_argument("--momentum", default=0.9, type=float, metavar="M", help="momentum")
+    parser.add_argument("--dropout", default=0.0, type=float, help="dropout rate")
     parser.add_argument(
         "--wd",
         "--weight-decay",
@@ -100,7 +101,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--mixup-alpha", default=0.2, type=float, help="mixup alpha (default: 0.0)")
     parser.add_argument("--cutmix-alpha", default=1.0, type=float, help="cutmix alpha (default: 0.0)")
     parser.add_argument("--lr-scheduler", default="cosineannealinglr", type=str, help="the lr scheduler (default: steplr)")
-    parser.add_argument("--lr-warmup-epochs", default=10, type=int, help="the number of epochs to warmup (default: 0)")
+    parser.add_argument("--lr-warmup-epochs", default=5, type=int, help="the number of epochs to warmup (default: 0)")
     parser.add_argument(
         "--lr-warmup-method", default="linear", type=str, help="the warmup method (default: constant)"
     )
@@ -299,8 +300,8 @@ def create_vit_general(img_size=(224,224), patch_size=(16,16), in_channels=3, em
         num_attention_heads=num_heads,
         intermediate_size=ff_hidden_dim,
         qkv_bias=True,  # Include biases for Q, K, V
-        hidden_dropout_prob=0,
-        attention_probs_dropout_prob=0,
+        hidden_dropout_prob=args.dropout,
+        attention_probs_dropout_prob=args.dropout,
         num_labels=num_classes, 
     )
 
