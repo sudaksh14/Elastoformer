@@ -9,7 +9,7 @@
 #SBATCH --cpus-per-task=12        # CPU cores per task
 #SBATCH --constraint="3090|A5000|titan_rtx"         # Request Specific GPUs (modify if needed)
 #SBATCH --output=./outputs/slurm_output_%A.out
-#SBATCH --exclude=ivi-cn005,ivi-cn009,ivi-cn010,ivi-cn011,ivi-cn012,ivi-cn001, ivi-cn002
+#SBATCH --exclude=ivi-cn005,ivi-cn009,ivi-cn010,ivi-cn011,ivi-cn012,ivi-cn001,ivi-cn002
 #SBATCH --export=ALL,WANDB_API_KEY=dfcd2574507b9ebe69ca13ab6f6925d864e82ee0
 
 echo "ViT Iterative Adaptivity 4-level Full Imagenet-1k Dataset"
@@ -33,20 +33,20 @@ export LOCAL_RANK=$SLURM_LOCALID
 nvidia-smi
 
 srun python ViT_iterative_adaptivity.py \
-    --exp_name ViT_Iter_Adaptivity_imagenet_1k_dropout \
+    --exp_name ViT_Iter_Adaptivity_imagenet_1k_SD \
     --model_name google/vit-base-patch16-224 \
     --pruning_type l1 \
     --pruning_ratio 0.6 \
     --iterative --pruning_steps 3 \
     --taylor_batchs 10 \
     --data_path /ssdstore/ImageNet/ \
-    --train_batch_size 256 \
-    --val_batch_size 256 \
+    --train_batch_size 128 \
+    --val_batch_size 128 \
     --save_as saves/state_dicts/ \
     --test_accuracy \
     --rebuild \
-    --epochs 30 \
-    --lr 5e-4 --dropout 0.1 \
+    --epochs 20 --core_epochs 50 \
+    --mixup-alpha 0.8 --core_weight_decay 0.05 \
     --distributed --model-ema \
     --clip-grad-norm 1 --amp --ra-sampler \
     --log_wandb

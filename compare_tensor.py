@@ -52,8 +52,8 @@ def compare_weights(sample_layer="vit.encoder.layer.0.attention.attention.key"):
         rebuilt_embed = rebuilt_dict['vit.encoder.layer.0.attention.attention.query.weight'].shape[0]
         rebuilt_ff = rebuilt_dict['vit.encoder.layer.0.intermediate.dense.weight'].shape[0]
 
-        vit_core = create_vit_general(embed_dim=prune_embed, output_dim=prune_embed, ff_hidden_dim=prune_ff)
-        vit_rebuilt = create_vit_general(embed_dim=rebuilt_embed, output_dim=rebuilt_embed, ff_hidden_dim=rebuilt_ff)
+        vit_core = create_vit_general(embed_dim=prune_embed, output_dim=prune_embed, ff_hidden_dim=prune_ff, hidden_dropout_prob=0.0, attention_probs_dropout_prob=0.0)
+        vit_rebuilt = create_vit_general(embed_dim=rebuilt_embed, output_dim=rebuilt_embed, ff_hidden_dim=rebuilt_ff, hidden_dropout_prob=0.0, attention_probs_dropout_prob=0.0)
 
         vit_core.load_state_dict(prune_dict)
         vit_rebuilt.load_state_dict(rebuilt_dict)
@@ -107,8 +107,8 @@ def compare_weights_multilevel(model_paths, prune_steps=3):
 
      
 if __name__ == '__main__':
-    paths = ["./saves/state_dicts/Vit_b_16_Core_Level_1_state_dict_ViT_Iter_Adaptivity_imagenet_1k.pth"] + \
-            [f"./saves/state_dicts/Vit_b_16_Rebuilt_Level_{i}_state_dict_ViT_Iter_Adaptivity_imagenet_1k.pth" for i in range(2,5)]
+    paths = ["./saves/state_dicts/Vit_b_16_Core_Level_1_state_dict_ViT_Iter_Adaptivity_test_SD.pth"] + \
+            [f"./saves/state_dicts/Vit_b_16_Rebuilt_Level_{i}_state_dict_ViT_Iter_Adaptivity_test_SD.pth" for i in range(2,5)]
     compare_weights_multilevel(paths, prune_steps=3)
     
     # compare_weights()

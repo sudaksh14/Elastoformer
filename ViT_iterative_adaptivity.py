@@ -17,7 +17,7 @@ import imgaug_presets
 from copy import deepcopy
 # from models.hf_vit import create_vit_general
 from prune_utils import *
-from trainer import fine_tuner, evaluate
+from trainer import fine_tuner, evaluate, fine_tuner_core
 from sampler import RASampler
 import utils
 import math
@@ -60,7 +60,8 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         "-b", "--batch-size", default=512, type=int, help="images per gpu, the total batch size is $NGPU x batch_size"
     )
-    parser.add_argument("--epochs", default=50, type=int, metavar="N", help="number of total epochs to run")
+    parser.add_argument("--epochs", default=20, type=int, metavar="N", help="number of total epochs to run")
+    parser.add_argument("--core_epochs", default=50, type=int, metavar="N", help="number of total epochs for the core model training")
     parser.add_argument(
         "-j", "--workers", default=16, type=int, metavar="N", help="number of data loading workers (default: 16)"
     )
@@ -68,6 +69,14 @@ def get_args_parser(add_help=True):
     parser.add_argument("--lr", default=0.003, type=float, help="initial learning rate")
     parser.add_argument("--momentum", default=0.9, type=float, metavar="M", help="momentum")
     parser.add_argument("--dropout", default=0.0, type=float, help="dropout rate")
+    parser.add_argument(
+        "--core_weight_decay",
+        default=0.3,
+        type=float,
+        metavar="W",
+        help="Core Training weight decay (default: 0.3)",
+        dest="core_weight_decay",
+    )
     parser.add_argument(
         "--wd",
         "--weight-decay",
@@ -300,8 +309,8 @@ def create_vit_general(img_size=(224,224), patch_size=(16,16), in_channels=3, em
         num_attention_heads=num_heads,
         intermediate_size=ff_hidden_dim,
         qkv_bias=True,  # Include biases for Q, K, V
-        hidden_dropout_prob=args.dropout,
-        attention_probs_dropout_prob=args.dropout,
+        hidden_dropout_prob=0.0,
+        attention_probs_dropout_prob=0.0,
         num_labels=num_classes, 
     )
 
@@ -688,13 +697,18 @@ def main(args):
             print()
 
     # Fine-Tune the Core model
-    fine_tuner(args, device, model, train_loader, val_loader, train_sampler, val_sampler)
+    inject_stochastic_depth(model)
+    fine_tuner_core(args, device, model, train_loader, val_loader, train_sampler, val_sampler)
 
-    core_weights = extract_vit_core_weights(model)
+    """
+    NOTE: Update the Core model weights after fine-tuning : 
+    We update the non-pruned weights after pruning Level-2 model (Which is the core model)
+    """
+    updated_core_weights = extract_vit_core_weights(model)
     with open(f"./saves/pruning_metadata/non_pruned_ViT_weights_Level_2.txt", "w") as file:
-        for key, value in core_weights.items():
+        for key, value in updated_core_weights.items():
             file.write(f"  {key}: {value}\n")
-    non_pruned_weights_recorder["Level_2"] = core_weights
+    non_pruned_weights_recorder["Level_2"] = updated_core_weights
     
     if args.test_accuracy:
         print("Testing accuracy of the pruned model...")
@@ -749,18 +763,17 @@ def main(args):
             #         print(model.state_dict()[f"{layer_name}.weight"].sum())
             #         print(layer.weight[exclude_dim0[:, None], exclude_dim1] == model.state_dict()[f"{layer_name}.weight"].to(device))
 
-
-            # fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler)
+            inject_stochastic_depth(rebuilt_model)
             fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler, rebuild=True, in_freeze_indices=non_pruned_index_mapped[0], out_freeze_indices=non_pruned_index_mapped[1])
 
             if i < args.pruning_steps - 1:
-                core_weights = extract_vit_core_weights(rebuilt_model)
+                updated_weights = extract_vit_core_weights(rebuilt_model)
                 with open(f"./saves/pruning_metadata/non_pruned_ViT_weights_Level_{i+3}.txt", "w") as file:
-                    for key, value in core_weights.items():
+                    for key, value in updated_weights.items():
                         file.write(f"  {key}: {value}\n")
-                non_pruned_weights_recorder[f"Level_{i+3}"] = core_weights
+                non_pruned_weights_recorder[f"Level_{i+3}"] = updated_weights
                 # DELETE UNUSED TENSORS TO FREE MEMORY
-                del core_weights
+                del updated_weights
 
             # print("Layer Name:", sample_layer)
             # print("After Fine-Tune")
@@ -795,13 +808,13 @@ def main(args):
                 print("Base Accuracy: %.4f, Pruned Accuracy: %.4f, Rebuilt Accuracy: %.4f"%(acc_ori, acc_pruned, acc_rebuilt))
 
             # DELETE UNUSED TENSORS TO FREE MEMORY
-            del pruned_weights, rebuilding_weights
+            del pruned_weights, rebuilding_weights, rebuilt_model
             torch.cuda.empty_cache()
         
         
         plot_comparison(accuracy=[acc_ori, acc_pruned, *acc_recorder], macs=[base_macs, pruned_macs, *macs_recorder], pruning_ratio=args.pruning_ratio, x_labels=(["Original"] + [f"Level-{i}" for i in range(1, args.pruning_steps+2)]), name=args.exp_name)
-
-
+        print("Test Accuracy:", [acc_ori, acc_pruned, *acc_recorder])
+        print("MAC's:", [base_macs, pruned_macs, *macs_recorder])
     
 
 

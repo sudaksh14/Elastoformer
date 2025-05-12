@@ -8,6 +8,7 @@ import re
 import matplotlib.pyplot as plt
 import numpy as np
 from partial_freezing import freeze_linear_params, freeze_conv2d_params, freeze_layernorm_params
+from timm.models.layers import DropPath
 
 
 def find_layers(module, layers=[nn.Linear], name=''):
@@ -1273,6 +1274,15 @@ def selective_gradient_clipping_norm(model, exclude_indices_dim0, exclude_indice
     #         print(original_weight_grads[layer_name].sum())
     #         print(layer.weight.grad[exclude_dim0[:, None], exclude_dim1].sum() == original_weight_grads[layer_name].sum())
 
+def inject_stochastic_depth(model, max_drop_path=0.1):
+    encoder_blocks = model.vit.encoder.layer
+    num_layers = len(encoder_blocks)
+    drop_rates = torch.linspace(0, max_drop_path, num_layers).tolist()
+
+    for i, block in enumerate(encoder_blocks):
+        if not hasattr(block, "drop_path"):
+            print("Adding Drop Path to the TX Layer")
+            block.drop_path = DropPath(drop_rates[i]) if drop_rates[i] > 0 else nn.Identity()
 
 def plot_comparison(accuracy, macs, pruning_ratio, x_labels=["Original", "Pruned", "Rebuilt"], name=None):
     
