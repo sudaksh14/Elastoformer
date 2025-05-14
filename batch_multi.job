@@ -33,7 +33,7 @@ export LOCAL_RANK=$SLURM_LOCALID
 nvidia-smi
 
 srun python ViT_iterative_adaptivity.py \
-    --exp_name ViT_Iter_Adaptivity_imagenet_1k_SD \
+    --exp_name ViT_Iter_Adaptivity_imagenet_1k_SD_50epochs \
     --model_name google/vit-base-patch16-224 \
     --pruning_type l1 \
     --pruning_ratio 0.6 \
@@ -45,7 +45,7 @@ srun python ViT_iterative_adaptivity.py \
     --save_as saves/state_dicts/ \
     --test_accuracy \
     --rebuild \
-    --epochs 20 --core_epochs 50 \
+    --epochs 50 --core_epochs 50 \
     --mixup-alpha 0.8 --core_weight_decay 0.05 \
     --distributed --model-ema \
     --clip-grad-norm 1 --amp --ra-sampler \

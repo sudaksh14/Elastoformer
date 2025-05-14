@@ -107,8 +107,8 @@ def compare_weights_multilevel(model_paths, prune_steps=3):
 
      
 if __name__ == '__main__':
-    paths = ["./saves/state_dicts/Vit_b_16_Core_Level_1_state_dict_ViT_Iter_Adaptivity_test_SD.pth"] + \
-            [f"./saves/state_dicts/Vit_b_16_Rebuilt_Level_{i}_state_dict_ViT_Iter_Adaptivity_test_SD.pth" for i in range(2,5)]
+    paths = ["./saves/state_dicts/Vit_b_16_Core_Level_1_state_dict_ViT_Iter_Adaptivity_imagenet_1k_SD.pth"] + \
+            [f"./saves/state_dicts/Vit_b_16_Rebuilt_Level_{i}_state_dict_ViT_Iter_Adaptivity_imagenet_1k_SD.pth" for i in range(2,5)]
     compare_weights_multilevel(paths, prune_steps=3)
     
     # compare_weights()

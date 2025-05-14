@@ -32,41 +32,24 @@ export CUDA_LAUNCH_BLOCKING=1
 
 nvidia-smi
 
-# srun python compare_tensor.py
-
-srun python ViT_iterative_adaptivity.py \
-    --exp_name ViT_Iter_Adaptivity_test_SD \
-    --model_name google/vit-base-patch16-224 \
-    --pruning_type l1 \
-    --pruning_ratio 0.6 \
-    --iterative --pruning_steps 3 \
-    --data_path /nvmestore/koelma/pytorch_work/ilsvrc2012/ \
-    --train_batch_size 128 \
-    --val_batch_size 128 \
-    --test_accuracy \
-    --save_as saves/state_dicts/ \
-    --rebuild \
-    --epochs 1 --core_epochs 1 \
-    --mixup-alpha 0.8 --core_weight_decay 0.3 \
-    --clip-grad-norm 1 --amp --ra-sampler \
-    --debug \
+srun python compare_tensor.py
 
 # srun python ViT_iterative_adaptivity.py \
-#     --exp_name ViT_Iter_Adaptivity_trial_exp \
+#     --exp_name ViT_Iter_Adaptivity_test_SD \
 #     --model_name google/vit-base-patch16-224 \
 #     --pruning_type l1 \
 #     --pruning_ratio 0.6 \
 #     --iterative --pruning_steps 3 \
-#     --data_path  /nvmestore/koelma/pytorch_work/ilsvrc2012/ \
+#     --data_path /nvmestore/koelma/pytorch_work/ilsvrc2012/ \
 #     --train_batch_size 128 \
 #     --val_batch_size 128 \
-#     --save_as saves/state_dicts/ \
 #     --test_accuracy \
+#     --save_as saves/state_dicts/ \
 #     --rebuild \
-#     --epochs 10 \
-#     --distributed --model-ema \
+#     --epochs 1 --core_epochs 1 \
+#     --mixup-alpha 0.8 --core_weight_decay 0.3 \
 #     --clip-grad-norm 1 --amp --ra-sampler \
-#     --log_wandb
+#     --debug \
 
 
 echo "Job Complete"
