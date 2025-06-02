@@ -45,7 +45,7 @@ srun python ViT_iterative_adaptivity.py \
     --save_as saves/state_dicts/ \
     --test_accuracy \
     --rebuild \
-    --epochs 1 --core_epochs 1 --lr-warmup-epochs 5 \
+    --epochs 50 --core_epochs 50 --lr-warmup-epochs 5 \
     --mixup-alpha 0.8 --core_weight_decay 0.05 --stochastic_depth \
     --clip-grad-norm 1 --amp --ra-sampler \
     --distributed --model-ema --log_wandb \
