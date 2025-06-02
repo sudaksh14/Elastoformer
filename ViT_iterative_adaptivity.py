@@ -41,7 +41,7 @@ def get_args_parser(add_help=True):
     parser.add_argument('--iterative', default=False, action='store_true', help='True for Iterative Pruning')
     parser.add_argument('--pruning_steps', default=1, type=int, help='number of Prune steps/Adaptive modes')
     parser.add_argument('--bottleneck', default=False, action='store_true', help='bottleneck or uniform')
-    parser.add_argument('--pruning_type', default='l1', type=str, help='pruning type', choices=['random', 'taylor', 'l1'])
+    parser.add_argument('--pruning_type', default='l1', type=str, help='pruning type', choices=['random', 'taylor', 'l1', 'l2', 'hessian'])
     parser.add_argument('--test_accuracy', default=False, action='store_true', help='test accuracy')
     parser.add_argument('--global_pruning', default=False, action='store_true', help='enables global pruning(global_compression = 1-pruning_ratio)')
     parser.add_argument('--isomorphic', default=False, action='store_true', help='enables isomorphic pruning ECCV 2024, https://arxiv.org/abs/2407.04616, overides global_pruning')
@@ -146,6 +146,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--ra-magnitude", default=9, type=int, help="magnitude of auto augment policy")
     parser.add_argument("--augmix-severity", default=3, type=int, help="severity of augmix policy")
     parser.add_argument("--random-erase", default=0.25, type=float, help="random erasing probability (default: 0.0)")
+    parser.add_argument("--stochastic_depth", action="store_true", help="Use Stochastic Depth for training, as implemented in https://arxiv.org/abs/1603.09382")
 
     # Mixed precision training parameters
     parser.add_argument("--amp", action="store_true", help="Use torch.cuda.amp for mixed precision training")
@@ -358,7 +359,7 @@ def compare_performance(args):
     pruned_acc = evaluate(pruned_model, criterion, val_loader, device=device)
     rebuilt_acc = evaluate(rebuilt_model, criterion, val_loader, device=device)
 
-    plot_comparison(accuracy=[orig_acc, pruned_acc, rebuilt_acc], macs=[base_macs, pruned_macs, rebuilt_macs], pruning_ratio=args.pruning_ratio)
+    plot_comparison_macs(args, accuracy=[orig_acc, pruned_acc, rebuilt_acc], macs=[base_macs, pruned_macs, rebuilt_macs], pruning_ratio=args.pruning_ratio)
     print("Plotting Complete")
 
 def prepare_imagenette(path="../Datasets/data/imagenette2-160", train_batch_size=64, val_batch_size=64, num_workers=4, use_imagenet_mean_std=True, debug=False):
@@ -411,7 +412,6 @@ def main(args):
 
     device = torch.device(args.device)
 
-    # device = 'cuda' if torch.cuda.is_available() else 'cpu'
     example_inputs = torch.randn(1,3,224,224).to(device)
 
     if args.pruning_type == 'random':
@@ -444,6 +444,10 @@ def main(args):
 
     base_macs, base_params = tp.utils.count_ops_and_params(model, example_inputs)
     print(f"Orig MAC's: {base_macs/1e9:.2f} G, Orig Params: {base_params/1e6:.2f} M")
+    if args.distributed:
+        base_size = get_model_size_mb_multi(model)
+    else:
+        base_size = get_model_size_mb(model)
 
     if args.test_accuracy:
         criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
@@ -596,25 +600,19 @@ def main(args):
 
         # Saving Pruned metadata
         pruned_weights = extract_vit_weight_subset(orig_copy, pruned_index_out[i], pruned_index_in[i])
-        with open(f"./saves/pruning_metadata/pruned_ViT_weights_Level_{args.pruning_steps + 1 - i}.txt", "w") as file:
-            for key, value in pruned_weights.items():
-                file.write(f"  {key}: {value}\n")
         pruned_weights_recorder[f"Level_{args.pruning_steps + 1 - i}"] = pruned_weights
 
         # Saving Non-Pruned metadata
-        # print(f"Non-Pruned Indices Metadata for Level-{args.pruning_steps + 1 - i}")
-        # for key, value in non_pruned_index_out[i].items():
-        #     print(key)
-        #     print("# Non-Pruned Index Dim0:", len(value))
-        #     if key in non_pruned_index_in[i]:
-        #         print("# Non-Pruned Index Dim1:", len(non_pruned_index_in[i][key]))
         non_pruned_weights = extract_vit_weight_subset(orig_copy, non_pruned_index_out[i], non_pruned_index_in[i])
-        with open(f"./saves/pruning_metadata/non_pruned_ViT_weights_Level_{args.pruning_steps + 1 - i}.txt", "w") as file:
-            for key, value in non_pruned_weights.items():
-                file.write(f"  {key}: {value}\n")
         non_pruned_weights_recorder[f"Level_{args.pruning_steps + 1 - i}"] = non_pruned_weights
 
-        print(f"Pruned & Non-Pruned weights stored for Level-{args.pruning_steps + 1 - i}")
+        checkpoint = {"pruned_weights": pruned_weights,
+                      "non_pruned_weights": non_pruned_weights,
+                      "pruned_indexes": [pruned_index_in[args.pruning_steps-i-1], pruned_index_out[args.pruning_steps-i-1]],
+                      "non_pruned_indexes": [non_pruned_index_in[args.pruning_steps-i-1], non_pruned_index_out[args.pruning_steps-i-1]]}
+        torch.save(checkpoint, f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{args.pruning_steps + 1 - i}.pth")
+
+        print(f"Pruning Metadata stored for Level-{args.pruning_steps + 1 - i}")
 
     print("Iterative Pruning complete")
 
@@ -696,8 +694,11 @@ def main(args):
             print("num_heads:", m.num_attention_heads, 'head_dims:', m.attention_head_size, 'all_head_size:', m.all_head_size)
             print()
 
+    if args.stochastic_depth:
+        inject_stochastic_depth(model)
+
     # Fine-Tune the Core model
-    inject_stochastic_depth(model)
+    print("================FINE-TUNING CORE MODEL/DESCENDANT MODEL LEVEL-1======================")
     fine_tuner_core(args, device, model, train_loader, val_loader, train_sampler, val_sampler)
 
     """
@@ -705,10 +706,12 @@ def main(args):
     We update the non-pruned weights after pruning Level-2 model (Which is the core model)
     """
     updated_core_weights = extract_vit_core_weights(model)
-    with open(f"./saves/pruning_metadata/non_pruned_ViT_weights_Level_2.txt", "w") as file:
-        for key, value in updated_core_weights.items():
-            file.write(f"  {key}: {value}\n")
+    checkpoint = torch.load(f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_2.pth")
+    checkpoint["non_pruned_weights"] = updated_core_weights
+    checkpoint["classifier"] = [model.classifier.weight.detach().clone(), model.classifier.bias.detach().clone()]
+    torch.save(checkpoint, f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_2.pth")
     non_pruned_weights_recorder["Level_2"] = updated_core_weights
+    print("Updated Pruning Metadata for Level-2")
     
     if args.test_accuracy:
         print("Testing accuracy of the pruned model...")
@@ -719,6 +722,7 @@ def main(args):
         print("Saving the pruned model to %s..."%args.save_as)
         os.makedirs(os.path.dirname(args.save_as), exist_ok=True)
         torch.save(model.state_dict(), f"{args.save_as}Vit_b_16_Core_Level_1_state_dict_{args.exp_name}.pth")
+        pruned_size = os.path.getsize(f"{args.save_as}Vit_b_16_Core_Level_1_state_dict_{args.exp_name}.pth") / (1024 * 1024)
 
     print("----------------------------------------")
     print("Summary:")
@@ -733,6 +737,8 @@ def main(args):
     if args.rebuild:
         print("----------------------------------------START REBUILDING----------------------------------------")
         macs_recorder = []
+        param_recorder = []
+        size_recorder = []
         acc_recorder = []
 
         for i in range(args.pruning_steps):
@@ -741,7 +747,7 @@ def main(args):
             rebuilding_weights = non_pruned_weights_recorder[f"Level_{i+2}"]
             pruned_weights = pruned_weights_recorder[f"Level_{i+2}"]
             rebuild_dim = get_vit_info(pruned_weights, rebuilding_weights)
-            print(rebuild_dim)
+            print("Model Info:", rebuild_dim)
             rebuilt_model = create_vit_general(dim_dict=rebuild_dim).to(device)
             rebuilt_model,_,non_pruned_index_mapped = update_vit_weights_global(rebuilt_model, [pruned_index_in[args.pruning_steps-i-1], pruned_index_out[args.pruning_steps-i-1]], 
                                                [non_pruned_index_in[args.pruning_steps-i-1], non_pruned_index_out[args.pruning_steps-i-1]], 
@@ -763,15 +769,19 @@ def main(args):
             #         print(model.state_dict()[f"{layer_name}.weight"].sum())
             #         print(layer.weight[exclude_dim0[:, None], exclude_dim1] == model.state_dict()[f"{layer_name}.weight"].to(device))
 
-            inject_stochastic_depth(rebuilt_model)
+            if args.stochastic_depth:
+                inject_stochastic_depth(rebuilt_model)
             fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler, rebuild=True, in_freeze_indices=non_pruned_index_mapped[0], out_freeze_indices=non_pruned_index_mapped[1])
 
             if i < args.pruning_steps - 1:
                 updated_weights = extract_vit_core_weights(rebuilt_model)
-                with open(f"./saves/pruning_metadata/non_pruned_ViT_weights_Level_{i+3}.txt", "w") as file:
-                    for key, value in updated_weights.items():
-                        file.write(f"  {key}: {value}\n")
+                checkpoint = torch.load(f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{i+3}.pth")
+                checkpoint["non_pruned_weights"] = updated_weights
+                checkpoint["classifier"] = [rebuilt_model.classifier.weight.detach().clone(), rebuilt_model.classifier.bias.detach().clone()]
+                torch.save(checkpoint, f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{i+3}.pth")
                 non_pruned_weights_recorder[f"Level_{i+3}"] = updated_weights
+                print(f"Updated Pruning Metadata for Level-{i+3}")
+                
                 # DELETE UNUSED TENSORS TO FREE MEMORY
                 del updated_weights
 
@@ -796,11 +806,14 @@ def main(args):
             if args.save_as is not None: 
                 print("Saving the rebuilt model to %s..."%args.save_as)
                 torch.save(rebuilt_model.state_dict(), f"{args.save_as}Vit_b_16_Rebuilt_Level_{i+2}_state_dict_{args.exp_name}.pth")
+                rebuilt_size = os.path.getsize(f"{args.save_as}Vit_b_16_Rebuilt_Level_{i+2}_state_dict_{args.exp_name}.pth") / (1024 * 1024)
+                size_recorder.append(rebuilt_size)
 
             print("----------------------------------------")
             print(f"Summary Level-{i+2}:")
             rebuilt_macs, rebuilt_params = tp.utils.count_ops_and_params(rebuilt_model, example_inputs)
             macs_recorder.append(rebuilt_macs)
+            param_recorder.append(rebuilt_params)
             print("Base MACs: %.2f G, Pruned MACs: %.2f G, Rebuilt MACs: %.2f G"%(base_macs/1e9, pruned_macs/1e9, rebuilt_macs/1e9))
             print("Base Params: %.2f M, Pruned Params: %.2f M, Rebuilt Params: %.2f M"%(base_params/1e6, pruned_params/1e6, rebuilt_params/1e6))
             if args.test_accuracy:
@@ -810,11 +823,27 @@ def main(args):
             # DELETE UNUSED TENSORS TO FREE MEMORY
             del pruned_weights, rebuilding_weights, rebuilt_model
             torch.cuda.empty_cache()
+
+            plot_comparison_macs(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], macs=[base_macs, pruned_macs, *macs_recorder], x_labels=(["Original"] + [f"Level-{j+1}" for j in range(i+2)]))
+            plot_comparison_params(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], params=[base_params, pruned_params, *param_recorder], x_labels=(["Original"] + [f"Level-{j+1}" for j in range(i+2)]))
+            plot_comparison_size(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], size=[base_size, pruned_size, *size_recorder], x_labels=(["Original"] + [f"Level-{j+1}" for j in range(i+2)]))
+            print("Test Accuracy:", [acc_ori, acc_pruned, *acc_recorder])
+            print("MAC's:", [base_macs, pruned_macs, *macs_recorder])
+            print("Params:", [base_params, pruned_params, *param_recorder])
+            print("Size:", [base_size, pruned_size, *size_recorder])
+            print("Plotting Complete")
+
+
         
         
-        plot_comparison(accuracy=[acc_ori, acc_pruned, *acc_recorder], macs=[base_macs, pruned_macs, *macs_recorder], pruning_ratio=args.pruning_ratio, x_labels=(["Original"] + [f"Level-{i}" for i in range(1, args.pruning_steps+2)]), name=args.exp_name)
+        plot_comparison_macs(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], macs=[base_macs, pruned_macs, *macs_recorder], x_labels=(["Original"] + [f"Level-{i}" for i in range(1, args.pruning_steps+2)]))
+        plot_comparison_params(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], params=[base_params, pruned_params, *param_recorder], x_labels=(["Original"] + [f"Level-{i}" for i in range(1, args.pruning_steps+2)]))
+        plot_comparison_size(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], size=[base_size, pruned_size, *size_recorder], x_labels=(["Original"] + [f"Level-{i}" for i in range(1, args.pruning_steps+2)]))
         print("Test Accuracy:", [acc_ori, acc_pruned, *acc_recorder])
         print("MAC's:", [base_macs, pruned_macs, *macs_recorder])
+        print("Params:", [base_params, pruned_params, *param_recorder])
+        print("Size:", [base_size, pruned_size, *size_recorder])
+        print("Rebuilding Complete")
     
 
 

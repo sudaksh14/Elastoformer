@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from partial_freezing import freeze_linear_params, freeze_conv2d_params, freeze_layernorm_params
 from timm.models.layers import DropPath
+import os
+import io
 
 
 def find_layers(module, layers=[nn.Linear], name=''):
@@ -733,7 +735,7 @@ def get_unpruned_indices(total_idxs, pruned_idxs, dim="out"):
 
     return unpruned_idxs.tolist()
 
-
+# FOR SINGLE MODE ADAPTIVITY / 2-LEVEL MODEL
 def update_vit_weights(model, pruned_indices_list, non_pruned_indices_list, pruned_weights_dict, non_pruned_weights_dict, include_bias=True, device=None):
     """
     Updates the weights of a Vision Transformer (ViT) model based on given indices and corresponding weights.
@@ -841,7 +843,7 @@ def update_vit_weights(model, pruned_indices_list, non_pruned_indices_list, prun
     return model
 
 
-# Merge and create new continuous indices
+# Merge and create new continuous indices / Very Imp for Iterative Growth
 def merge_and_remap_indices(pruned, non_pruned):
     merged = sorted(set(pruned + non_pruned))
     remap = {idx: i for i, idx in enumerate(merged)}
@@ -905,9 +907,45 @@ def update_vit_weights_global(model, pruned_indices_list, non_pruned_indices_lis
         elif isinstance(layer, nn.Linear):
             pruned_dim0, non_pruned_dim0, _ = merge_and_remap_indices(pruned_out[layer_name], non_pruned_out[layer_name])
             pruned_dim1, non_pruned_dim1, _ = merge_and_remap_indices(pruned_in[layer_name], non_pruned_in[layer_name])
+            
+            try:
+                rows_pruned = torch.tensor(pruned_dim0, device=device)
+                cols_pruned = torch.tensor(pruned_dim1, device=device)
 
-            weight[torch.tensor(pruned_dim0)[:, None], torch.tensor(pruned_dim1)] = torch.tensor(pruned_weights["Weight"], device=device)
-            weight[torch.tensor(non_pruned_dim0)[:, None], torch.tensor(non_pruned_dim1)] = torch.tensor(non_pruned_weights["Weight"], device=device)
+                # Replace pruned weights
+                if rows_pruned.numel() > 0 and cols_pruned.numel() > 0:
+                    row_idx, col_idx = torch.meshgrid(rows_pruned, cols_pruned, indexing="ij")
+                    weight[row_idx, col_idx] = torch.tensor(pruned_weights["Weight"], device=device)
+
+                rows_non_pruned = torch.tensor(non_pruned_dim0, device=device)
+                cols_non_pruned = torch.tensor(non_pruned_dim1, device=device)
+                
+                # Replace non-pruned weights
+                if rows_non_pruned.numel() > 0 and cols_non_pruned.numel() > 0:
+                    row_idx, col_idx = torch.meshgrid(rows_non_pruned, cols_non_pruned, indexing="ij")
+                    weight[row_idx, col_idx] = torch.tensor(non_pruned_weights["Weight"], device=device)
+            
+            except Exception as e:
+                print(f"Failed at: {layer_name}")
+                print("Error:", e)
+                
+                # if len(pruned_dim0) > 0:
+                #     print(weight[torch.tensor(pruned_dim0)].shape)
+                #     print(weight[torch.tensor(non_pruned_dim0)].shape)   
+                # elif len(pruned_dim1) > 0:
+                #     print(weight[:, torch.tensor(pruned_dim1)].shape)
+                #     print(weight[:, torch.tensor(non_pruned_dim1)].shape)
+                # print(pruned_weights["Weight"])
+                # print("----------------------------------")
+                # print(pruned_dim0, len(pruned_dim0))
+                # print(pruned_dim1, len(pruned_dim1))
+                # print(non_pruned_dim0, len(non_pruned_dim0))    
+                # print(non_pruned_dim1, len(non_pruned_dim1))
+                # print(pruned_weights["Weight"].shape)
+                # print(non_pruned_weights["Weight"].shape)
+
+                # print(pruned_out[layer_name], len(pruned_out[layer_name]))
+                # print(pruned_in[layer_name], len(pruned_in[layer_name]))
 
             pruned_out_mapped[layer_name] = pruned_dim0
             non_pruned_out_mapped[layer_name] = non_pruned_dim0
@@ -930,8 +968,10 @@ def update_vit_weights_global(model, pruned_indices_list, non_pruned_indices_lis
                 layer.bias.data = torch.tensor(non_pruned_weights["Bias"], device=device)
             else:
                 bias = layer.bias.data
-                bias[torch.tensor(pruned_dim0)] = torch.tensor(pruned_weights["Bias"], device=device)
-                bias[torch.tensor(non_pruned_dim0)] = torch.tensor(non_pruned_weights["Bias"], device=device)
+                if len(pruned_dim0) > 0:
+                    bias[torch.tensor(pruned_dim0)] = torch.tensor(pruned_weights["Bias"], device=device)
+                if len(non_pruned_dim0) > 0:
+                    bias[torch.tensor(non_pruned_dim0)] = torch.tensor(non_pruned_weights["Bias"], device=device)
 
     return model, [pruned_in_mapped, pruned_out_mapped], [non_pruned_in_mapped, non_pruned_out_mapped]
 
@@ -1284,11 +1324,11 @@ def inject_stochastic_depth(model, max_drop_path=0.1):
             print("Adding Drop Path to the TX Layer")
             block.drop_path = DropPath(drop_rates[i]) if drop_rates[i] > 0 else nn.Identity()
 
-def plot_comparison(accuracy, macs, pruning_ratio, x_labels=["Original", "Pruned", "Rebuilt"], name=None):
+def plot_comparison_macs(args, accuracy, macs, x_labels=["Original", "Pruned", "Rebuilt"]):
     
     x = np.arange(len(x_labels))  # X-axis positions
 
-    fig, ax1 = plt.subplots(figsize=(7,5))
+    fig, ax1 = plt.subplots(figsize=(12,6))
 
     # Plot Accuracy (Left Y-axis)
     ax1.set_xlabel("Model Stage")
@@ -1303,16 +1343,69 @@ def plot_comparison(accuracy, macs, pruning_ratio, x_labels=["Original", "Pruned
     ax2.tick_params(axis="y", labelcolor="tab:red")
 
     # X-axis labels
-    plt.xticks(x, x_labels)
+    plt.xticks(x, x_labels, rotation=45)
 
     # Title and Grid
     plt.title("Accuracy vs MACs Across Model Stages")
     ax1.grid(True, linestyle="--", alpha=0.5)
 
-    if name is not None:
-        plt.savefig(f"./saves/plots/comparison_plot_vit_b_16_PR_{pruning_ratio}_{name}.png")
-    else:
-        plt.savefig(f"./saves/plots/comparison_plot_vit_b_16_PR_{pruning_ratio}.png")
+    plt.savefig(f"./saves/plots/Acc_MAC's_comparison_plot_vit_b_16_PR_{args.pruning_ratio}_{args.exp_name}.png")
+
+
+def plot_comparison_params(args, accuracy, params, x_labels=["Original", "Pruned", "Rebuilt"]):
+    
+    x = np.arange(len(x_labels))  # X-axis positions
+
+    fig, ax1 = plt.subplots(figsize=(12,6))
+
+    # Plot Accuracy (Left Y-axis)
+    ax1.set_xlabel("Model Stage")
+    ax1.set_ylabel("Accuracy (%)", color="tab:blue")
+    ax1.plot(x, accuracy, marker="o", linestyle="-", color="tab:blue", label="Accuracy")
+    ax1.tick_params(axis="y", labelcolor="tab:blue")
+
+    # Second Y-axis for MACs
+    ax2 = ax1.twinx()
+    ax2.set_ylabel("Params (M)", color="tab:red")
+    ax2.plot(x, params, marker="s", linestyle="--", color="tab:red", label="MACs")
+    ax2.tick_params(axis="y", labelcolor="tab:red")
+
+    # X-axis labels
+    plt.xticks(x, x_labels, rotation=45)
+
+    # Title and Grid
+    plt.title("Accuracy vs MACs Across Model Stages")
+    ax1.grid(True, linestyle="--", alpha=0.5)
+
+    plt.savefig(f"./saves/plots/Acc_params_comparison_plot_vit_b_16_PR_{args.pruning_ratio}_{args.exp_name}.png")
+
+def plot_comparison_size(args, accuracy, size, x_labels=["Original", "Pruned", "Rebuilt"]):
+    
+    x = np.arange(len(x_labels))  # X-axis positions
+
+    fig, ax1 = plt.subplots(figsize=(12,6))
+
+    # Plot Accuracy (Left Y-axis)
+    ax1.set_xlabel("Model Stage")
+    ax1.set_ylabel("Accuracy (%)", color="tab:blue")
+    ax1.plot(x, accuracy, marker="o", linestyle="-", color="tab:blue", label="Accuracy")
+    ax1.tick_params(axis="y", labelcolor="tab:blue")
+
+    # Second Y-axis for MACs
+    ax2 = ax1.twinx()
+    ax2.set_ylabel("Model Size (MB)", color="tab:red")
+    ax2.plot(x, size, marker="s", linestyle="--", color="tab:red", label="MACs")
+    ax2.tick_params(axis="y", labelcolor="tab:red")
+
+    # X-axis labels
+    plt.xticks(x, x_labels, rotation=45)
+
+    # Title and Grid
+    plt.title("Accuracy vs MACs Across Model Stages")
+    ax1.grid(True, linestyle="--", alpha=0.5)
+
+    plt.savefig(f"./saves/plots/Acc_size_comparison_plot_vit_b_16_PR_{args.pruning_ratio}_{args.exp_name}.png")
+
 
 def plot_tensor(tensor, title="Tensor Plot", cmap='viridis', figsize=(6, 4)):
     """
@@ -1349,6 +1442,33 @@ def plot_tensor(tensor, title="Tensor Plot", cmap='viridis', figsize=(6, 4)):
     plt.title(title)
     plt.savefig(f"./saves/plots/{title}.png")
 
+def get_model_size_mb(model):
+    """Returns the size of the model's state_dict in megabytes (MB)."""
+    buffer = torch.save(model.state_dict(), "_temp.pth")  # Save to buffer
+    import os
+    size_mb = os.path.getsize("_temp.pth") / (1024 * 1024)
+    os.remove("_temp.pth")
+    return size_mb
+
+def get_model_size_mb_multi(model, rank=0):
+    """
+    Calculate model size in MB safely in multi-GPU environments (e.g., SLURM/DDP).
+    Only executes on the specified rank (default: rank 0).
+    """
+    # Only rank 0 should run this to avoid duplication
+    if int(os.environ.get("SLURM_PROCID", 0)) != rank:
+        return None  # Other ranks do nothing
+
+    buffer = io.BytesIO()
+
+    # Handle DataParallel or DDP
+    if hasattr(model, "module"):
+        torch.save(model.module.state_dict(), buffer)
+    else:
+        torch.save(model.state_dict(), buffer)
+
+    size_mb = buffer.getbuffer().nbytes / (1024 * 1024)
+    return size_mb
 
 # def replace_all_vit_attention_blocks(model, out_dim, num_heads=None):
 #     model.config.num_attention_heads = num_heads

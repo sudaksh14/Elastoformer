@@ -12,7 +12,7 @@
 #SBATCH --exclude=ivi-cn005,ivi-cn009,ivi-cn010,ivi-cn011,ivi-cn012,ivi-cn001,ivi-cn002
 #SBATCH --export=ALL,WANDB_API_KEY=dfcd2574507b9ebe69ca13ab6f6925d864e82ee0
 
-echo "ViT Iterative Adaptivity 4-level Full Imagenet-1k Dataset"
+echo "ViT Iterative Adaptivity on Imagenet-1k Dataset"
 echo | date
 echo "Node name: $(hostname)"
 echo -n memory=; ulimit -m
@@ -33,11 +33,11 @@ export LOCAL_RANK=$SLURM_LOCALID
 nvidia-smi
 
 srun python ViT_iterative_adaptivity.py \
-    --exp_name ViT_Iter_Adaptivity_imagenet_1k_SD_50epochs \
+    --exp_name ViT_Iter_Adaptivity_multistep_imagenet1k_50ep \
     --model_name google/vit-base-patch16-224 \
     --pruning_type l1 \
-    --pruning_ratio 0.6 \
-    --iterative --pruning_steps 3 \
+    --pruning_ratio 0.5 \
+    --iterative --pruning_steps 10 \
     --taylor_batchs 10 \
     --data_path /ssdstore/ImageNet/ \
     --train_batch_size 128 \
@@ -45,11 +45,11 @@ srun python ViT_iterative_adaptivity.py \
     --save_as saves/state_dicts/ \
     --test_accuracy \
     --rebuild \
-    --epochs 50 --core_epochs 50 \
-    --mixup-alpha 0.8 --core_weight_decay 0.05 \
-    --distributed --model-ema \
+    --epochs 1 --core_epochs 1 --lr-warmup-epochs 5 \
+    --mixup-alpha 0.8 --core_weight_decay 0.05 --stochastic_depth \
     --clip-grad-norm 1 --amp --ra-sampler \
-    --log_wandb
+    --distributed --model-ema --log_wandb \
+    
 
 
 # srun python ViT_adaptivity.py \

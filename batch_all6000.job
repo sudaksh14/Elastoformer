@@ -1,13 +1,13 @@
 #!/bin/bash
 #SBATCH -t 165:00:00
-#SBATCH --ntasks=1
+#SBATCH --ntasks=4
 #SBATCH --nodes=1
 #SBATCH --job-name=simple
 #SBATCH --account=all6000users
 #SBATCH --partition=all6000
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:4
 #SBATCH --mem=128G
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=12
 #SBATCH --output=./outputs/slurm_output_%A.out
 #SBATCH --exclude=ivi-cn005,ivi-cn009,ivi-cn010,ivi-cn011,ivi-cn012,ivi-cn001
 #SBATCH --export=ALL,WANDB_API_KEY=dfcd2574507b9ebe69ca13ab6f6925d864e82ee0
@@ -32,24 +32,43 @@ export CUDA_LAUNCH_BLOCKING=1
 
 nvidia-smi
 
-srun python compare_tensor.py
+# srun python compare_tensor.py
 
-# srun python ViT_iterative_adaptivity.py \
-#     --exp_name ViT_Iter_Adaptivity_test_SD \
-#     --model_name google/vit-base-patch16-224 \
-#     --pruning_type l1 \
-#     --pruning_ratio 0.6 \
-#     --iterative --pruning_steps 3 \
-#     --data_path /nvmestore/koelma/pytorch_work/ilsvrc2012/ \
-#     --train_batch_size 128 \
-#     --val_batch_size 128 \
-#     --test_accuracy \
-#     --save_as saves/state_dicts/ \
-#     --rebuild \
-#     --epochs 1 --core_epochs 1 \
-#     --mixup-alpha 0.8 --core_weight_decay 0.3 \
-#     --clip-grad-norm 1 --amp --ra-sampler \
-#     --debug \
+srun python ViT_iterative_adaptivity.py \
+    --exp_name ViT_Iter_Adaptivity_test_multistep_imagenet1k \
+    --model_name google/vit-base-patch16-224 \
+    --pruning_type l1 \
+    --pruning_ratio 0.8 \
+    --iterative --pruning_steps 10 \
+    --taylor_batchs 10 \
+    --data_path /nvmestore/koelma/pytorch_work/ilsvrc2012/ \
+    --train_batch_size 128 \
+    --val_batch_size 128 \
+    --save_as saves/state_dicts/ \
+    --test_accuracy \
+    --rebuild \
+    --epochs 1 --core_epochs 1 --lr-warmup-epochs 0 \
+    --mixup-alpha 0.8 --core_weight_decay 0.05 --stochastic_depth \
+    --clip-grad-norm 1 --amp --ra-sampler \
+    --debug
+
+srun python ViT_iterative_adaptivity.py \
+    --exp_name ViT_Iter_Adaptivity_test_multistep \
+    --model_name google/vit-base-patch16-224 \
+    --pruning_type l1 \
+    --pruning_ratio 0.8 \
+    --iterative --pruning_steps 10 \
+    --taylor_batchs 10 \
+    --data_path /nvmestore/koelma/pytorch_work/ilsvrc2012/ \
+    --train_batch_size 128 \
+    --val_batch_size 128 \
+    --save_as saves/state_dicts/ \
+    --test_accuracy \
+    --rebuild \
+    --epochs 20 --core_epochs 20 --lr-warmup-epochs 0 \
+    --mixup-alpha 0.8 --core_weight_decay 0.05 --stochastic_depth \
+    --clip-grad-norm 1 --amp --ra-sampler \
+    --distributed --model-ema --log_wandb \
 
 
 echo "Job Complete"
