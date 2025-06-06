@@ -1011,22 +1011,6 @@ def zero_out_gradients(model, in_indices, out_indices):
                 if layer.bias is not None:
                     layer.bias.grad[freeze_dim0] = 0
 
-            # if layer_name == "vit.encoder.layer.0.attention.attention.query":
-            #     print("Query Layer Gradients")
-            #     print("Dim0:", freeze_dim0)
-            #     print("Dim1:", freeze_dim1)
-            #     print(layer.weight.grad[freeze_dim0[0]])
-            #     print(layer.weight.grad[:, freeze_dim1[0]])
-            #     # print(layer.weight.grad[freeze_dim0[:, None], freeze_dim1])
-            #     # print(layer.weight.grad[:10])
-            #     # print(freeze_dim0.shape, freeze_dim1.shape)
-            #     freeze = torch.sum(layer.weight.grad == 0).item()
-            #     print(freeze, freeze == (freeze_dim0.shape[0] * freeze_dim1.shape[0]))
-            #     plot_tensor(layer.weight.grad, title="Query Layer Gradients", cmap="plasma", figsize=(10, 10))
-            #     exit()
-
-
-
         elif isinstance(layer, (nn.LayerNorm, nn.Conv2d)):
             freeze_dim0 = out_indices[layer_name]
 
@@ -1156,7 +1140,7 @@ def zero_out_gradients_v3(model, in_indices, out_indices, device='cuda' if torch
                 if layer.bias is not None:
                     layer.bias.grad[freeze_dim0] = 0
 
-# FINAL FREEZING FUNCTION
+# NOTE: FINAL FREEZING FUNCTION IN USE
 def freeze_partial_weights(model, in_indices, out_indices, device='cuda' if torch.cuda.is_available() else 'cpu'):
 
     for layer_name, layer in model.named_modules():
@@ -1456,8 +1440,8 @@ def get_model_size_mb_multi(model, rank=0):
     Only executes on the specified rank (default: rank 0).
     """
     # Only rank 0 should run this to avoid duplication
-    if int(os.environ.get("SLURM_PROCID", 0)) != rank:
-        return None  # Other ranks do nothing
+    # if int(os.environ.get("SLURM_PROCID", 0)) != rank:
+    #     return None  # Other ranks do nothing
 
     buffer = io.BytesIO()
 
@@ -1470,6 +1454,15 @@ def get_model_size_mb_multi(model, rank=0):
     size_mb = buffer.getbuffer().nbytes / (1024 * 1024)
     return size_mb
 
+def print_trainable_summary(model):
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    frozen_params = total_params - trainable_params
+
+    print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
+    print(f"Frozen parameters: {frozen_params:,}")
+
 # def replace_all_vit_attention_blocks(model, out_dim, num_heads=None):
 #     model.config.num_attention_heads = num_heads
 #     new_attn = PrunedViTSelfAttention(model.config, out_dim)
@@ -1478,3 +1471,132 @@ def get_model_size_mb_multi(model, rank=0):
 #             print(f"Replacing ViT Self Attention Block: {id}")
 #             block = new_attn
 #     return model
+
+def get_deit_size(state_dict):
+    deit_hidden_info = {}
+    
+    # q_weight_shape = state_dict["deit.encoder.layer.0.attention.attention.query.weight"]
+    # num_heads = q_weight_shape.shape[0] // q_weight_shape.shape[1]
+    # deit_hidden_info["num_heads"] = num_heads
+
+    # Identify transformer block layers dynamically
+    layer_indices = set()
+    for key in state_dict.keys():
+        parts = key.split(".")
+        if "encoder" in parts and any(part.isdigit() for part in parts):
+            layer_indices.add(int(parts[parts.index("encoder") + 2]))
+
+            for layer_idx in sorted(layer_indices):
+                # Attention Weight dimension
+                q_weight_key = f"deit.encoder.layer.{layer_idx}.attention.attention.query.weight"
+                attn_hidden_dim0 = state_dict[q_weight_key].shape[0] if q_weight_key in state_dict else None
+                attn_hidden_dim1 = state_dict[q_weight_key].shape[1] if q_weight_key in state_dict else None
+                deit_hidden_info[q_weight_key] = (attn_hidden_dim0, attn_hidden_dim1)
+
+                k_weight_key = f"deit.encoder.layer.{layer_idx}.attention.attention.key.weight"
+                attn_hidden_dim0 = state_dict[k_weight_key].shape[0] if k_weight_key in state_dict else None
+                attn_hidden_dim1 = state_dict[k_weight_key].shape[1] if k_weight_key in state_dict else None
+                deit_hidden_info[k_weight_key] = (attn_hidden_dim0, attn_hidden_dim1)
+
+                v_weight_key = f"deit.encoder.layer.{layer_idx}.attention.attention.value.weight"
+                attn_hidden_dim0 = state_dict[v_weight_key].shape[0] if v_weight_key in state_dict else None
+                attn_hidden_dim1 = state_dict[v_weight_key].shape[1] if v_weight_key in state_dict else None
+                deit_hidden_info[v_weight_key] = (attn_hidden_dim0, attn_hidden_dim1)
+
+                # Projection hidden dimension
+                proj_weight_key = f"deit.encoder.layer.{layer_idx}.attention.output.dense.weight"
+                proj_hidden_dim0 = state_dict[proj_weight_key].shape[0] if proj_weight_key in state_dict else None
+                proj_hidden_dim1 = state_dict[proj_weight_key].shape[1] if proj_weight_key in state_dict else None
+                deit_hidden_info[proj_weight_key] = (proj_hidden_dim0, proj_hidden_dim1)
+
+                # FFN1 hidden dimension
+                ffn1_weight_key = f"deit.encoder.layer.{layer_idx}.intermediate.dense.weight"
+                ffn_inter_dim0 = state_dict[ffn1_weight_key].shape[0] if ffn1_weight_key in state_dict else None
+                ffn_inter_dim1 = state_dict[ffn1_weight_key].shape[1] if ffn1_weight_key in state_dict else None
+                deit_hidden_info[ffn1_weight_key] = (ffn_inter_dim0, ffn_inter_dim1)
+
+                # FFN2 hidden dimension
+                ffn2_weight_key = f"deit.encoder.layer.{layer_idx}.output.dense.weight"
+                ffn_out_dim0 = state_dict[ffn2_weight_key].shape[0] if ffn2_weight_key in state_dict else None
+                ffn_out_dim1 = state_dict[ffn2_weight_key].shape[1] if ffn1_weight_key in state_dict else None
+                deit_hidden_info[ffn2_weight_key] = (ffn_out_dim0, ffn_out_dim1)
+
+                # LayerNorm dimensions
+                norm1_key = f"deit.encoder.layer.{layer_idx}.layernorm_before.weight"
+                norm2_key = f"deit.encoder.layer.{layer_idx}.layernorm_after.weight"
+                norm1_dim = state_dict[norm1_key].shape[0] if norm1_key in state_dict else None
+                norm2_dim = state_dict[norm2_key].shape[0] if norm2_key in state_dict else None
+                deit_hidden_info[norm1_key] = norm1_dim
+                deit_hidden_info[norm2_key] = norm2_dim
+
+        
+        elif "embeddings" in parts:
+            # Embeddings dimension (e.g., input embedding)
+            embedding_dim_key = "deit.embeddings.patch_embeddings.projection.weight"
+            deit_hidden_info[embedding_dim_key] = state_dict[embedding_dim_key].shape[0] if embedding_dim_key in state_dict else None
+
+        elif "layernorm" in parts:
+            LN_key = "deit.layernorm.weight"
+            deit_hidden_info[LN_key] = state_dict[LN_key].shape[0] if LN_key in state_dict else None
+        
+        elif "classifier" in parts:
+            # Classifier dimension (e.g., the final linear layer for classification)
+            classifier_dim_key = "classifier.weight"
+            deit_hidden_info[classifier_dim_key] = state_dict[classifier_dim_key].shape[1] if classifier_dim_key in state_dict else None
+
+    return deit_hidden_info
+
+def get_deit_info(pruned_weights=None, non_pruned_weights=None, num_heads=None, core_model=False):
+    """
+    Extracts the embedding size from a dictionary containing non-pruned weights.
+
+    Args:
+        non_pruned_dict (dict): Dictionary containing non-pruned weights.
+
+    Returns:
+        dict: deit Model Config for Rebuilding.
+    """
+    deit_info = {}
+
+    # for layer_name, layer_weights in non_pruned_weights.items():
+    #     print(layer_name)
+    #     print(layer_weights["Weight"].shape)
+    #     print(layer_weights["Bias"].shape)
+    if core_model:
+        for layer_name, layer_weights in non_pruned_weights.items():
+
+            if "deit.embeddings.patch_embeddings.projection.weight" in layer_name:
+                deit_info["Embed_Dim"] = layer_weights.shape[0] 
+
+            if "deit.encoder.layer.0.attention.attention.query.weight" in layer_name:
+                deit_info["QKV_Dim_out"] = layer_weights.shape[0] 
+                deit_info["QKV_Dim_in"] = layer_weights.shape[1]
+                
+            if "deit.encoder.layer.0.intermediate.dense.weight" in layer_name:
+                deit_info["FFN_Intermediate_Dim"] = layer_weights.shape[0] 
+
+            if "deit.encoder.layer.0.output.dense.weight" in layer_name:
+                deit_info["FFN_Output_Dim"] = layer_weights.shape[0] 
+
+        deit_info["num_layers"] = max(int(key.split(".")[3]) for key in non_pruned_weights if key.startswith("deit.encoder.layer")) + 1
+        deit_info["num_heads"] = get_num_heads(deit_info["QKV_Dim_out"])
+        return deit_info
+
+    for layer_name, layer_weights in non_pruned_weights.items():
+
+        if "deit.embeddings.patch_embeddings.projection" in layer_name:
+            deit_info["Embed_Dim"] = layer_weights["Weight"].shape[0] + pruned_weights[layer_name]["Weight"].shape[0]
+
+        if "deit.encoder.layer.0.attention.attention.query" in layer_name:
+            deit_info["QKV_Dim_out"] = layer_weights["Weight"].shape[0] + pruned_weights[layer_name]["Weight"].shape[0]
+            deit_info["QKV_Dim_in"] = layer_weights["Weight"].shape[1] + pruned_weights[layer_name]["Weight"].shape[1]
+            
+        if "deit.encoder.layer.0.intermediate.dense" in layer_name:
+            deit_info["FFN_Intermediate_Dim"] = layer_weights["Weight"].shape[0] + pruned_weights[layer_name]["Weight"].shape[0]
+
+        if "deit.encoder.layer.0.output.dense" in layer_name:
+            deit_info["FFN_Output_Dim"] = layer_weights["Weight"].shape[0] + pruned_weights[layer_name]["Weight"].shape[0]
+
+    deit_info["num_layers"] = max(int(key.split(".")[3]) for key in non_pruned_weights if key.startswith("deit.encoder.layer")) + 1
+    deit_info["num_heads"] = get_num_heads(deit_info["QKV_Dim_out"])
+    return deit_info

@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Set, Tuple, Union
 import torch
 import torch.nn.functional as F
 import torch_pruning as tp
+from transformers.models.deit.modeling_deit_pruned import PrunedDeiTSelfAttention, DeiTSelfOutput, DeiTLayer, DeiTForImageClassification, DeiTModel, DeiTConfig
 from transformers.models.vit.modeling_vit_pruned import PrunedViTSelfAttention, ViTSelfOutput, ViTLayer, ViTForImageClassification, ViTModel, ViTConfig
 import transformers
 from transformers import AutoConfig, AutoModelForImageClassification
@@ -313,7 +314,7 @@ def create_vit_general(img_size=(224,224), patch_size=(16,16), in_channels=3, em
         qkv_dim = dim_dict["QKV_Dim_out"]
 
 
-    config = ViTConfig(
+    config = DeiTConfig(
         image_size=img_size,
         patch_size=patch_size,
         num_channels=in_channels,
@@ -327,7 +328,7 @@ def create_vit_general(img_size=(224,224), patch_size=(16,16), in_channels=3, em
         num_labels=num_classes)
 
     config.pruned_dim = qkv_dim
-    model = ViTForImageClassification(config)
+    model = DeiTForImageClassification(config)
     return model
 
 def compare_performance(args):
@@ -354,7 +355,7 @@ def compare_performance(args):
 
     _,val_loader,_,_ = prepare_imagenet(args.data_path, train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size)
 
-    original_model = ViTForImageClassification.from_pretrained(args.model_name).to(device)
+    original_model = DeiTForImageClassification.from_pretrained(args.model_name).to(device)
     pruned_model = create_vit_general(embed_dim=prune_embed, output_dim=prune_embed, ff_hidden_dim=prune_ff).to(device)
     rebuilt_model = create_vit_general(embed_dim=rebuilt_embed, output_dim=rebuilt_embed, ff_hidden_dim=rebuilt_ff).to(device)
 
@@ -441,38 +442,12 @@ def main(args):
         # train_loader, val_loader, train_sampler, val_sampler = prepare_imagenette()
 
     # Load the model
-    model = ViTForImageClassification.from_pretrained(args.model_name).to(device)
+    model = DeiTForImageClassification.from_pretrained(args.model_name).to(device)
 
-    # Fine-Tune the Orignal Model (ONLY FOR IMAGENETTE)
-    if False:
-        for param in model.vit.parameters():
-            param.requires_grad = False
-
-        print_trainable_summary(model)
-        for name, param in model.named_parameters():
-            print(f"{name}: {'Trainable' if param.requires_grad else 'Frozen'} - {param.numel():,} params")
-
-        if args.test_accuracy:
-            criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
-            print("Testing accuracy of the original model...")
-            acc_ori, loss_ori = evaluate(model, criterion, val_loader, device=device, dist=args.distributed)
-            print("Accuracy: %.4f, Loss: %.4f"%(acc_ori, loss_ori))
-
-        fine_tuner(args, device, model, train_loader, val_loader, train_sampler, val_sampler)
-        print("Fine-tuning complete")
-        if args.test_accuracy:
-            criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
-            print("Testing accuracy of the original model...")
-            acc_ori, loss_ori = evaluate(model, criterion, val_loader, device=device, dist=args.distributed)
-            print("Accuracy: %.4f, Loss: %.4f"%(acc_ori, loss_ori))
-        
-        model.save_pretrained("./pretrained_weights/vit/vit_base_patch16_224_ft_in1k")
-
-    
     orig_copy = deepcopy(model)
 
     orig_statedict = orig_copy.state_dict()
-    orig_dimensions = get_layer_size(orig_statedict)
+    orig_dimensions = get_deit_size(orig_statedict)
     orig_dimensions['num_heads'] = orig_copy.config.num_attention_heads
 
     base_macs, base_params = tp.utils.count_ops_and_params(model, example_inputs)
@@ -493,11 +468,11 @@ def main(args):
     ignored_layers = [model.classifier]
     # All heads should be pruned simultaneously, so we group channels by head.
     for m in model.modules():
-        if isinstance(m, PrunedViTSelfAttention):
+        if isinstance(m, PrunedDeiTSelfAttention):
             num_heads[m.query] = m.num_attention_heads
             num_heads[m.key] = m.num_attention_heads
             num_heads[m.value] = m.num_attention_heads
-        if args.bottleneck and isinstance(m, ViTSelfOutput):
+        if args.bottleneck and isinstance(m, DeiTSelfOutput):
             ignored_layers.append(m.dense) # only prune the internal layers of FFN & Attention
                 
     pruner = tp.pruner.BasePruner(
@@ -714,12 +689,12 @@ def main(args):
     #     if isinstance(layer, (nn.Linear, nn.Conv2d)):
     #         print(name)
     #         print(layer.weight.shape)
-    model_info = get_vit_info(non_pruned_weights=model.state_dict(), num_heads=orig_copy.config.num_attention_heads, core_model=True)
+    model_info = get_deit_info(non_pruned_weights=model.state_dict(), num_heads=orig_copy.config.num_attention_heads, core_model=True)
     print("Model Info:", model_info)
     # model = replace_all_vit_attention_blocks(model, out_dim=model_info["QKV_Dim_out"], num_heads=model_info["num_heads"])
 
     for id, m in enumerate(model.modules()):
-        if isinstance(m, transformers.models.vit.modeling_vit_pruned.PrunedViTSelfAttention):
+        if isinstance(m, transformers.models.deit.modeling_deit_pruned.PrunedDeiTSelfAttention):
             print("num_heads:", m.num_attention_heads, 'head_dims:', m.attention_head_size, 'all_head_size:', m.all_head_size, '=>')
             m.num_attention_heads = model_info["num_heads"]
             m.attention_head_size = m.query.out_features // m.num_attention_heads
@@ -728,7 +703,7 @@ def main(args):
             print()
 
     if args.stochastic_depth:
-        inject_stochastic_depth(model)
+        inject_stochastic_depth_deit(model)
 
     # Fine-Tune the Core model
     print("================FINE-TUNING CORE MODEL/DESCENDANT MODEL LEVEL-1======================")
@@ -779,7 +754,7 @@ def main(args):
 
             rebuilding_weights = non_pruned_weights_recorder[f"Level_{i+2}"]
             pruned_weights = pruned_weights_recorder[f"Level_{i+2}"]
-            rebuild_dim = get_vit_info(pruned_weights, rebuilding_weights)
+            rebuild_dim = get_deit_info(pruned_weights, rebuilding_weights)
             print("Model Info:", rebuild_dim)
             rebuilt_model = create_vit_general(dim_dict=rebuild_dim).to(device)
             rebuilt_model,_,non_pruned_index_mapped = update_vit_weights_global(rebuilt_model, [pruned_index_in[args.pruning_steps-i-1], pruned_index_out[args.pruning_steps-i-1]], 
@@ -803,7 +778,7 @@ def main(args):
             #         print(layer.weight[exclude_dim0[:, None], exclude_dim1] == model.state_dict()[f"{layer_name}.weight"].to(device))
 
             if args.stochastic_depth:
-                inject_stochastic_depth(rebuilt_model)
+                inject_stochastic_depth_deit(rebuilt_model)
             fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler, rebuild=True, in_freeze_indices=non_pruned_index_mapped[0], out_freeze_indices=non_pruned_index_mapped[1])
 
             if i < args.pruning_steps - 1:

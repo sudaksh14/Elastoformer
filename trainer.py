@@ -275,37 +275,6 @@ def fine_tuner(args, device, model, data_loader, data_loader_test, train_sampler
     else:
         torch.backends.cudnn.benchmark = True
 
-    # train_dir = os.path.join(args.data_path, "train")
-    # val_dir = os.path.join(args.data_path, "val")
-    # dataset, dataset_test, train_sampler, test_sampler = load_data(train_dir, val_dir, args)
-
-    # num_classes = len(dataset.classes)
-    num_classes = 1000
-    mixup_cutmix = get_mixup_cutmix(
-        mixup_alpha=args.mixup_alpha, cutmix_alpha=args.cutmix_alpha, num_classes=num_classes, use_v2=args.use_v2
-    )
-    if mixup_cutmix is not None:
-
-        def collate_fn(batch):
-            return mixup_cutmix(*default_collate(batch))
-
-    else:
-        collate_fn = default_collate
-
-    # data_loader = torch.utils.data.DataLoader(
-    #     dataset,
-    #     batch_size=args.batch_size,
-    #     sampler=train_sampler,
-    #     num_workers=args.workers,
-    #     pin_memory=True,
-    #     collate_fn=collate_fn,
-    # )
-    # data_loader_test = torch.utils.data.DataLoader(
-    #     dataset_test, batch_size=args.batch_size, sampler=test_sampler, num_workers=args.workers, pin_memory=True
-    # )
-
-    # print("Creating model")
-    # model = torchvision.models.get_model(args.model, weights=args.weights, num_classes=num_classes)
     model.to(device)
 
     if args.distributed and args.sync_bn:
@@ -500,18 +469,6 @@ def fine_tuner_core(args, device, model, data_loader, data_loader_test, train_sa
         torch.use_deterministic_algorithms(True)
     else:
         torch.backends.cudnn.benchmark = True
-
-    num_classes = 1000
-    mixup_cutmix = get_mixup_cutmix(
-        mixup_alpha=args.mixup_alpha, cutmix_alpha=args.cutmix_alpha, num_classes=num_classes, use_v2=args.use_v2
-    )
-    if mixup_cutmix is not None:
-
-        def collate_fn(batch):
-            return mixup_cutmix(*default_collate(batch))
-
-    else:
-        collate_fn = default_collate
 
     model.to(device)
 
