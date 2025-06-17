@@ -29,13 +29,14 @@ export WORLD_SIZE=$SLURM_NTASKS
 export RANK=$SLURM_PROCID
 export LOCAL_RANK=$SLURM_LOCALID
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export CUDA_LAUNCH_BLOCKING=1
 
 nvidia-smi
 
 # srun python datasets.py
-srun python compare_tensor.py
+# srun python compare_tensor.py
+srun python latency.py
 
-# export CUDA_LAUNCH_BLOCKING=1
 # srun python ViT_iterative_adaptivity.py \
 #     --exp_name ViT_Iter_Adaptivity_imagenette \
 #     --model_name google/vit-base-patch16-224 \

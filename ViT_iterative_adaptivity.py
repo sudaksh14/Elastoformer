@@ -9,6 +9,7 @@ import transformers
 from transformers import AutoConfig, AutoModelForImageClassification
 import warnings
 from torchvision.datasets import ImageFolder
+import torchvision.datasets as datasets
 import torchvision.transforms as T
 from torchvision.transforms.functional import InterpolationMode
 import torchvision.models as models
@@ -38,6 +39,7 @@ def get_args_parser(add_help=True):
 
     parser.add_argument('--exp_name', default='ViT_Adaptivity', type=str, help='Name of the experiment')
     parser.add_argument('--model_name', default='google/vit-base-patch16-224', type=str, help='model name')
+    parser.add_argument('--dataset_name', default='imagenet', type=str, help='Dataset used')
     parser.add_argument('--data_path', default='data/imagenet', type=str, help='model name')
     parser.add_argument('--taylor_batchs', default=10, type=int, help='number of batchs for taylor criterion')
     parser.add_argument('--pruning_ratio', default=0.5, type=float, help='prune ratio')
@@ -410,6 +412,82 @@ def prepare_imagenette(path="../Datasets/data/imagenette2-160", train_batch_size
         return train_loader, val_loader, train_sampler, val_sampler
     else:
         return train_loader, val_loader, None, None
+    
+def get_cifar_dataloaders(dataset='cifar10', data_root='../Datasets/data', batch_size=128, num_workers=4, distributed=True):
+    """
+    Returns train and test loaders for CIFAR-10 or CIFAR-100 with ImageNet-compatible transforms.
+    """
+
+    # ImageNet mean and std
+    imagenet_mean = [0.485, 0.456, 0.406]
+    imagenet_std = [0.229, 0.224, 0.225]
+
+    # Transform for training and testing
+    # transform_train = T.Compose([
+    #     T.Resize(256),                        # Resize smaller edge to 256
+    #     T.RandomCrop(224),                    # Crop to 224×224 (random)
+    #     T.RandomHorizontalFlip(),             # Flip with 50% chance
+    #     T.ColorJitter(0.4, 0.4, 0.4, 0.1),    # Slight color augmentation
+    #     T.RandomErasing(p=0.25),              # Random erasing (optional but effective)
+    #     T.ToTensor(),
+    #     T.Normalize(mean=imagenet_mean, std=imagenet_std),
+    # ])
+
+    # transform_test = T.Compose([
+    #     T.Resize(256),
+    #     T.CenterCrop(224),
+    #     T.ToTensor(),
+    #     T.Normalize(mean=imagenet_mean, std=imagenet_std),
+    # ])
+
+    transform_train = T.Compose([
+        T.Resize(224),
+        T.RandomHorizontalFlip(),         
+        T.ToTensor(),
+        T.Normalize(mean=imagenet_mean, std=imagenet_std),
+    ])
+
+    transform_test = T.Compose([
+        T.Resize(224),
+        T.ToTensor(),
+        T.Normalize(mean=imagenet_mean, std=imagenet_std),
+    ])
+
+    
+
+    if dataset.lower() == 'cifar10':
+        train_dataset = datasets.CIFAR10(root=data_root, train=True, download=True, transform=transform_train)
+        test_dataset = datasets.CIFAR10(root=data_root, train=False, download=True, transform=transform_test)
+        num_classes = 10
+    elif dataset.lower() == 'cifar100':
+        train_dataset = datasets.CIFAR100(root=data_root, train=True, download=True, transform=transform_train)
+        test_dataset = datasets.CIFAR100(root=data_root, train=False, download=True, transform=transform_test)
+        num_classes = 100
+    else:
+        raise ValueError("Dataset must be either 'cifar10' or 'cifar100'.")
+
+    if distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
+        test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, shuffle=False)
+    else:
+        train_sampler = None
+        test_sampler = None
+
+    # ADD CUTMIX AND MIXUP AUGMENTATIONS
+    mixup_cutmix = get_mixup_cutmix(mixup_alpha=0.8, cutmix_alpha=1.0, num_classes=num_classes, use_v2=False)
+    if mixup_cutmix is not None:
+        def collate_fn(batch):
+            return mixup_cutmix(*default_collate(batch))
+    else:
+        collate_fn = default_collate
+
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=(train_sampler is None),
+                              sampler=train_sampler, num_workers=num_workers, pin_memory=True, collate_fn=collate_fn)
+    
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False,
+                             sampler=test_sampler, num_workers=num_workers, pin_memory=True)
+
+    return train_loader, test_loader, train_sampler, test_sampler, num_classes
 
 
 ######################################################################## MAIN STARTS ###########################################################################
@@ -420,7 +498,7 @@ def main(args):
             utils.init_distributed_mode(args)
     print(args)
 
-    device = torch.device(args.device)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     example_inputs = torch.randn(1,3,224,224).to(device)
 
@@ -436,12 +514,15 @@ def main(args):
         imp = tp.importance.GroupHessianImportance()
     else: raise NotImplementedError
 
-    if args.pruning_type=='taylor' or args.test_accuracy:
-        train_loader, val_loader, train_sampler, val_sampler = prepare_imagenet(args.data_path, train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size, debug=args.debug)
-        # train_loader, val_loader, train_sampler, val_sampler = prepare_imagenette()
-
+    # train_loader, val_loader, train_sampler, val_sampler = prepare_imagenet(args.data_path, train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size, debug=args.debug)
+    # train_loader, val_loader, train_sampler, val_sampler = prepare_imagenette()
+    train_loader, val_loader, train_sampler, val_sampler, num_classes = get_cifar_dataloaders(dataset=args.dataset_name, batch_size=args.train_batch_size, distributed=args.distributed)
+    
     # Load the model
-    model = ViTForImageClassification.from_pretrained(args.model_name).to(device)
+    model = ViTForImageClassification.from_pretrained(args.model_name)
+    if args.dataset_name.startswith('cifar'):
+        model.classifier = nn.Linear(model.config.hidden_size, num_classes)
+    model = model.to(device)
 
     # Fine-Tune the Orignal Model (ONLY FOR IMAGENETTE)
     if False:
@@ -643,15 +724,13 @@ def main(args):
                       "non_pruned_weights": non_pruned_weights,
                       "pruned_indexes": [pruned_index_in[args.pruning_steps-i-1], pruned_index_out[args.pruning_steps-i-1]],
                       "non_pruned_indexes": [non_pruned_index_in[args.pruning_steps-i-1], non_pruned_index_out[args.pruning_steps-i-1]]}
-        torch.save(checkpoint, f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{args.pruning_steps + 1 - i}.pth")
+        # torch.save(checkpoint, f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{args.pruning_steps + 1 - i}.pth")
 
         print(f"Pruning Metadata stored for Level-{args.pruning_steps + 1 - i}")
 
     print("Iterative Pruning complete")
 
 
-
-    
     ############################################################################################################
     # ---------------------------------------------FOR DEBUGGING-----------------------------------------------#
     
@@ -739,10 +818,10 @@ def main(args):
     We update the non-pruned weights after pruning Level-2 model (Which is the core model)
     """
     updated_core_weights = extract_vit_core_weights(model)
-    checkpoint = torch.load(f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_2.pth")
-    checkpoint["non_pruned_weights"] = updated_core_weights
-    checkpoint["classifier"] = [model.classifier.weight.detach().clone(), model.classifier.bias.detach().clone()]
-    torch.save(checkpoint, f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_2.pth")
+    # checkpoint = torch.load(f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_2.pth")
+    # checkpoint["non_pruned_weights"] = updated_core_weights
+    # checkpoint["classifier"] = [model.classifier.weight.detach().clone(), model.classifier.bias.detach().clone()]
+    # torch.save(checkpoint, f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_2.pth")
     non_pruned_weights_recorder["Level_2"] = updated_core_weights
     print("Updated Pruning Metadata for Level-2")
     
@@ -781,14 +860,14 @@ def main(args):
             pruned_weights = pruned_weights_recorder[f"Level_{i+2}"]
             rebuild_dim = get_vit_info(pruned_weights, rebuilding_weights)
             print("Model Info:", rebuild_dim)
-            rebuilt_model = create_vit_general(dim_dict=rebuild_dim).to(device)
+            rebuilt_model = create_vit_general(dim_dict=rebuild_dim, num_classes=num_classes).to(device)
             rebuilt_model,_,non_pruned_index_mapped = update_vit_weights_global(rebuilt_model, [pruned_index_in[args.pruning_steps-i-1], pruned_index_out[args.pruning_steps-i-1]], 
                                                [non_pruned_index_in[args.pruning_steps-i-1], non_pruned_index_out[args.pruning_steps-i-1]], 
                                                pruned_weights_recorder[f"Level_{i+2}"], non_pruned_weights_recorder[f"Level_{i+2}"], device=device)
             
             # partial freezing of grads for freezing the core weights
             freeze_partial_weights(rebuilt_model, non_pruned_index_mapped[0], non_pruned_index_mapped[1], device)
-
+            
             # sample_layer = 'vit.encoder.layer.11.output.dense'
             # print("Layer Name:", sample_layer)
             # print("Before Fine-Tune")
@@ -808,10 +887,10 @@ def main(args):
 
             if i < args.pruning_steps - 1:
                 updated_weights = extract_vit_core_weights(rebuilt_model)
-                checkpoint = torch.load(f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{i+3}.pth")
-                checkpoint["non_pruned_weights"] = updated_weights
-                checkpoint["classifier"] = [rebuilt_model.classifier.weight.detach().clone(), rebuilt_model.classifier.bias.detach().clone()]
-                torch.save(checkpoint, f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{i+3}.pth")
+                # checkpoint = torch.load(f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{i+3}.pth")
+                # checkpoint["non_pruned_weights"] = updated_weights
+                # checkpoint["classifier"] = [rebuilt_model.classifier.weight.detach().clone(), rebuilt_model.classifier.bias.detach().clone()]
+                # torch.save(checkpoint, f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{i+3}.pth")
                 non_pruned_weights_recorder[f"Level_{i+3}"] = updated_weights
                 print(f"Updated Pruning Metadata for Level-{i+3}")
                 

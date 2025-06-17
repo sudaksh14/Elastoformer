@@ -16,10 +16,11 @@ from torch import nn
 from torch.utils.data.dataloader import default_collate
 from torchvision.transforms.functional import InterpolationMode
 from aug_transforms import get_mixup_cutmix
-from prune_utils import zero_out_gradients, zero_out_gradients_v2, zero_out_gradients_v3, selective_gradient_clipping_norm
+from prune_utils import selective_gradient_clipping_norm
+from cnn_prune_utils import selective_gradient_clipping_norm_cnn
 
 
-def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None):
+def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None, CNN=False):
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter("lr", utils.SmoothedValue(window_size=1, fmt="{value}"))
@@ -30,7 +31,10 @@ def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, arg
         start_time = time.time()
         image, target = image.to(device), target.to(device)
         with torch.autocast(device_type="cuda", enabled=scaler is not None):
-            output = model(image).logits
+            if CNN:
+                output = model(image)
+            else:
+                output = model(image).logits
             loss = criterion(output, target)
 
         optimizer.zero_grad()
@@ -63,7 +67,7 @@ def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, arg
 
     return metric_logger
 
-def train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None):
+def train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None, CNN=False):
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter("lr", utils.SmoothedValue(window_size=1, fmt="{value}"))
@@ -74,7 +78,10 @@ def train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criteri
         start_time = time.time()
         image, target = image.to(device), target.to(device)
         with torch.autocast(device_type="cuda", enabled=scaler is not None):
-            output = model(image).logits
+            if CNN:
+                output = model(image)
+            else:
+                output = model(image).logits
             loss = criterion(output, target)
 
         optimizer.zero_grad()
@@ -96,9 +103,9 @@ def train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criteri
             
             if args.clip_grad_norm is not None:
                 if args.distributed:
-                    selective_gradient_clipping_norm(model.module, out_freeze_indices, in_freeze_indices, args.clip_grad_norm, device)
+                    selective_gradient_clipping_norm_cnn(model.module, out_freeze_indices, in_freeze_indices, args.clip_grad_norm, device)
                 else:
-                    selective_gradient_clipping_norm(model, out_freeze_indices, in_freeze_indices, args.clip_grad_norm, device)
+                    selective_gradient_clipping_norm_cnn(model, out_freeze_indices, in_freeze_indices, args.clip_grad_norm, device)
 
             optimizer.step()
 
@@ -118,7 +125,7 @@ def train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criteri
     return metric_logger
 
 
-def evaluate(model, criterion, data_loader, device, print_freq=100, log_suffix="", dist=False):
+def evaluate(model, criterion, data_loader, device, print_freq=100, log_suffix="", dist=False, CNN=False):
     model.eval()
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = f"Test: {log_suffix}"
@@ -128,7 +135,10 @@ def evaluate(model, criterion, data_loader, device, print_freq=100, log_suffix="
         for image, target in metric_logger.log_every(data_loader, print_freq, header):
             image = image.to(device, non_blocking=True)
             target = target.to(device, non_blocking=True)
-            output = model(image).logits
+            if CNN:
+                output = model(image)
+            else:
+                output = model(image).logits
             loss = criterion(output, target)
 
             acc1, acc5 = utils.accuracy(output, target, topk=(1, 5))
@@ -386,9 +396,9 @@ def fine_tuner(args, device, model, data_loader, data_loader_test, train_sampler
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
         if model_ema:
-            evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", dist=args.distributed)
+            evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", dist=args.distributed, CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")))
         else:
-            evaluate(model, criterion, data_loader_test, device=device, dist=args.distributed)
+            evaluate(model, criterion, data_loader_test, device=device, dist=args.distributed, CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")))
         return
 
     if args.log_wandb:
@@ -412,13 +422,13 @@ def fine_tuner(args, device, model, data_loader, data_loader_test, train_sampler
         if args.distributed:
             train_sampler.set_epoch(epoch)
         if rebuild:
-            metrics = train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler)
+            metrics = train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler, CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")))
         else:
-            metrics = train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler)
+            metrics = train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler, CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")))
         
-        test_acc1,_ = evaluate(model, criterion, data_loader_test, device=device, dist=args.distributed)
+        test_acc1,_ = evaluate(model, criterion, data_loader_test, device=device, dist=args.distributed, CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")))
         if model_ema:
-            test_ema_acc1,_ = evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", dist=args.distributed)
+            test_ema_acc1,_ = evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", dist=args.distributed, CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")))
         
         wandb_metrics = metrics.get_all_averages()
 
@@ -607,10 +617,10 @@ def fine_tuner_core(args, device, model, data_loader, data_loader_test, train_sa
         if args.distributed:
             train_sampler.set_epoch(epoch)
 
-        metrics = train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler)
-        test_acc1,_ = evaluate(model, criterion, data_loader_test, device=device, dist=args.distributed)
+        metrics = train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler, CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")))
+        test_acc1,_ = evaluate(model, criterion, data_loader_test, device=device, dist=args.distributed, CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")))
         if model_ema:
-            test_ema_acc1,_ = evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", dist=args.distributed)
+            test_ema_acc1,_ = evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", dist=args.distributed, CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")))
         
         wandb_metrics = metrics.get_all_averages()
 

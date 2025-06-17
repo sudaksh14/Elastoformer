@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from ViT_iterative_adaptivity import create_vit_general 
 from prune_utils import get_vit_info
+from cnn_prune_utils import resnet_generator
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Running on device:", device)
@@ -32,6 +33,14 @@ def check_overlap(big_tensor, small_tensor):
     print(f"Matching values: {small_tensor[overlap].shape}")  # Prints matching values
     print(f"All values Nested: {small_tensor.flatten().shape == small_tensor[overlap].shape}")
 
+def check_similarity(t1, t2):
+        # Check shape
+        print(f"  - Shape 1: {t1.shape}, Shape 2: {t2.shape}")
+        # Compute cosine similarity or L2 norm difference
+        diff = (t1 - t2).abs().mean().item()
+        print(f"  - Mean Absolute Difference: {diff:.6f}")
+        cos_sim = torch.nn.functional.cosine_similarity(t1.flatten(), t2.flatten(), dim=0).item()
+        print(f"  - Cosine Similarity: {cos_sim:.6f}")
 
 def compare_weights(sample_layer="vit.encoder.layer.0.attention.attention.key"):
     
@@ -104,35 +113,83 @@ def compare_weights_multilevel(model_paths, prune_steps=3):
                     print("")
 
 
+def get_model_info_resnet(state_dict=None):
+    """
+    Extracts the channel dimensions for each Conv and BatchNorm layer in a ResNet model.
+
+    Args:
+        pruned_weights (dict): Dictionary of pruned weights.
+        non_pruned_weights (dict): Dictionary of non-pruned weights.
+        core_model (bool): Whether to use core model only (no pruned weights).
+
+    Returns:
+        dict: Dictionary with channel sizes for each layer.
+    """
+    model_info = {}
+
+    for layer_name, layer_weights in state_dict.items():
+        layer_info = {}
+
+        if "weight" in layer_name:
+            weight = layer_weights
+            if len(weight.shape) > 1: 
+                layer_info["out_channels"] = weight.shape[0]
+                layer_info["in_channels"] = weight.shape[1]
+        
+        if layer_info:
+            model_info[layer_name.replace('.weight', '').replace('.bias', '')] = (layer_info["out_channels"], layer_info["in_channels"]) if "out_channels" in layer_info else (layer_info["num_features"], None)
+
+    return model_info
+
+
+def compare_resnet_weights_multilevel(model_paths, prune_steps=3, device='cpu'):
+    """
+    Compare weights between multiple versions (levels) of ResNet models.
+
+    Args:
+        model_paths (List[str]): Paths to model state_dicts [level1, level2, level3, ...]
+        prune_steps (int): Number of levels to compare
+        model_creator (callable): Function that returns a ResNet model instance
+        device (str or torch.device): Device to map the models to
+    """
+    state_dicts = [torch.load(p, map_location=device) for p in model_paths]
+    models = []
+
+    # Initialize models using provided model creator
+    for sd in state_dicts:
+        model_info = get_model_info_resnet(sd)
+        model = resnet_generator(arch="resnet50", channel_dict=model_info)
+        model.load_state_dict(sd)
+        model.eval()
+        models.append(model.to(device))
+
+    for i in range(prune_steps):
+        print(f"\n🔍 Comparing Level {i+2} ➡️ Level {i+1}")
+        model_high = models[i+1]
+        model_low = models[i]
+
+        for (name_high, layer_high), (name_low, layer_low) in zip(model_high.named_modules(), model_low.named_modules()):
+            if isinstance(layer_high, (nn.Conv2d, nn.BatchNorm2d, nn.Linear)):
+                if hasattr(layer_high, 'weight') and hasattr(layer_low, 'weight'):
+                    try:
+                        print(f"\n📌 Layer: {name_high}")
+                        check_overlap(layer_high.weight.data, layer_low.weight.data)
+
+                        # If the layer has bias
+                        if hasattr(layer_high, 'bias') and layer_high.bias is not None:
+                            check_overlap(layer_high.bias.data, layer_low.bias.data)
+                    except Exception as e:
+                        print(f"⚠️ Error comparing layer {name_high}: {e}")
 
      
 if __name__ == '__main__':
-    paths = ["./saves/state_dicts/Vit_b_16_Core_Level_1_state_dict_ViT_Iter_Adaptivity_imagenet_1k_SD_50epochs.pth"] + \
-            [f"./saves/state_dicts/Vit_b_16_Rebuilt_Level_{i}_state_dict_ViT_Iter_Adaptivity_imagenet_1k_SD_50epochs.pth" for i in range(2,5)]
-    compare_weights_multilevel(paths, prune_steps=3)
-    
-    # compare_weights()
-    
-    # cls_token =  nn.Parameter(torch.randn(1, 1, 768))
-    # pos_embed = nn.Parameter(torch.randn(1, 196 + 1, 768))
+    # paths = ["./saves/state_dicts/Vit_b_16_Core_Level_1_state_dict_deit_Iter_Adaptivity_lowlr.pth"] + \
+    #         [f"./saves/state_dicts/Vit_b_16_Rebuilt_Level_{i}_state_dict_deit_Iter_Adaptivity_lowlr.pth" for i in range(2,7)]
+    # compare_weights_multilevel(paths, prune_steps=5)
 
-    # print(cls_token.shape)
-    # print(pos_embed.shape)
-
-
-    # FOR DEBUGGING
-    # for name, layer in model.named_modules():
-    #     if name == "vit.encoder.layer.0.attention.attention.key":
-    #         freeze_dim0 = torch.tensor(non_pruned_index_out[name], dtype=torch.long, device=device)
-    #         freeze_dim1 = torch.tensor(non_pruned_index_in[name], dtype=torch.long, device=device)
-    #         t1 = layer.weight[freeze_dim0[:, None], freeze_dim1]
-    #         print(t1.shape)
-    #         # print(t1)
-
-    #         t2 = torch.tensor(non_pruned_weights[name]["Weight"], device=device)
-    #         print(t2.shape)
-    #         # print(t2)
-            
-    #         print(t1==t2)
-    #         overlap = torch.isin(t1, t2)
-    #         print(t1[overlap].shape)
+    compare_resnet_weights_multilevel(
+        model_paths=["./saves/state_dicts/Vit_b_16_Core_Level_1_state_dict_Resnet50_Iter_Adaptivity_SGD.pth"] + \
+            [f"./saves/state_dicts/Vit_b_16_Rebuilt_Level_{i}_state_dict_Resnet50_Iter_Adaptivity_SGD.pth" for i in range(2,7)],
+        prune_steps=5,
+        device='cuda' if torch.cuda.is_available() else 'cpu'
+    )
