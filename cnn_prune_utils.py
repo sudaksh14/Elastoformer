@@ -1234,6 +1234,7 @@ def inject_stochastic_depth_resnet(model, max_drop_path=0.1):
     for i, block in enumerate(all_blocks):
         drop_prob = drop_rates[i]
         if not hasattr(block, 'drop_path'):
+            print("Adding Drop Path to the ResNet Block")
             block.drop_path = DropPath(drop_prob) if drop_prob > 0 else nn.Identity()
         else:
             block.drop_path.drop_prob = drop_prob  # Update if already exists

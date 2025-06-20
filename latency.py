@@ -15,7 +15,7 @@ def load_vit_model(state_dict_path=None, device='cuda'):
     model.eval()
     return model
 
-def measure_latency(model, input_size=(1, 3, 224, 224), warmup=10, trials=30):
+def measure_latency(model, input_size=(1, 3, 224, 224), warmup=10, trials=100):
     dummy_input = torch.randn(*input_size).to(next(model.parameters()).device)
 
     # Warm-up
@@ -40,7 +40,9 @@ def measure_latency(model, input_size=(1, 3, 224, 224), warmup=10, trials=30):
 
 
 if __name__ == "__main__":
-    model = ViTForImageClassification.from_pretrained("facebook/deit-base-patch16-224")
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = ViTForImageClassification.from_pretrained("facebook/deit-base-patch16-224").to(device)
+    model.eval()
     latency_ms = measure_latency(model)
     print(f"🕒 Average Latency (BS=128, 224x224): {latency_ms:.2f} ms")
     exit()

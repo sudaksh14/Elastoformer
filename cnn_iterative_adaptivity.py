@@ -392,9 +392,11 @@ def main(args):
         imp = tp.importance.GroupHessianImportance()
     else: raise NotImplementedError
 
-    if args.pruning_type=='taylor' or args.test_accuracy:
-        # train_loader, val_loader, train_sampler, val_sampler = prepare_imagenet(args.data_path, train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size, debug=args.debug)
+    if args.dataset_name.startswith('imagenet'):
+        train_loader, val_loader, train_sampler, val_sampler = prepare_imagenet(args.data_path, train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size, debug=args.debug)
+        num_classes = 1000
         # train_loader, val_loader, train_sampler, val_sampler = prepare_imagenette()
+    if args.dataset_name.startswith('cifar'):
         train_loader, val_loader, train_sampler, val_sampler, num_classes = get_cifar_dataloaders(dataset=args.dataset_name, batch_size=args.train_batch_size, distributed=args.distributed)
 
     # Load the model
@@ -444,7 +446,7 @@ def main(args):
     print("Pruning %s..."%args.model_name)
     ignored_layers = []
     for m in model.modules():
-        if isinstance(m, nn.Linear) and m.out_features == 100:
+        if isinstance(m, nn.Linear) and m.out_features == num_classes:
             ignored_layers.append(m)
 
     print("Ignored Layers:", ignored_layers)
