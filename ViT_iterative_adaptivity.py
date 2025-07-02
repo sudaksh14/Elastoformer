@@ -723,11 +723,16 @@ def main(args):
         non_pruned_weights = extract_vit_weight_subset(orig_copy, non_pruned_index_out[i], non_pruned_index_in[i])
         non_pruned_weights_recorder[f"Level_{args.pruning_steps + 1 - i}"] = non_pruned_weights
 
-        checkpoint = {"pruned_weights": pruned_weights,
-                      "non_pruned_weights": non_pruned_weights,
-                      "pruned_indexes": [pruned_index_in[args.pruning_steps-i-1], pruned_index_out[args.pruning_steps-i-1]],
-                      "non_pruned_indexes": [non_pruned_index_in[args.pruning_steps-i-1], non_pruned_index_out[args.pruning_steps-i-1]]}
+        # checkpoint = {"pruned_weights": pruned_weights,
+        #               "non_pruned_weights": non_pruned_weights,
+        #               "pruned_indexes": [pruned_index_in[args.pruning_steps-i-1], pruned_index_out[args.pruning_steps-i-1]],
+        #               "non_pruned_indexes": [non_pruned_index_in[args.pruning_steps-i-1], non_pruned_index_out[args.pruning_steps-i-1]]}
         # torch.save(checkpoint, f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{args.pruning_steps + 1 - i}.pth")
+
+        checkpoint = {"weights": pruned_weights,
+                      "pruned_index": [pruned_index_in[args.pruning_steps-i-1], pruned_index_out[args.pruning_steps-i-1]],
+                      "non_pruned_index": [non_pruned_index_in[args.pruning_steps-i-1], non_pruned_index_out[args.pruning_steps-i-1]]}
+        torch.save(checkpoint, f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{args.pruning_steps + 1 - i}.pth")
 
         print(f"Pruning Metadata stored for Level-{args.pruning_steps + 1 - i}")
 
@@ -809,8 +814,8 @@ def main(args):
             print("num_heads:", m.num_attention_heads, 'head_dims:', m.attention_head_size, 'all_head_size:', m.all_head_size)
             print()
 
-    if args.stochastic_depth:
-        inject_stochastic_depth(model)
+    # if args.stochastic_depth:
+    #     inject_stochastic_depth(model)
 
     # Fine-Tune the Core model
     print("================FINE-TUNING CORE MODEL/DESCENDANT MODEL LEVEL-1======================")

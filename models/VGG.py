@@ -86,3 +86,64 @@ def VGG_General(channel_dict, variant="VGG16"):
             block_layers = []
 
     return VGG(conv_config)
+
+
+class VGG_AnyDepth(nn.Module):
+    def __init__(self, channel_dict, num_classes=1000):
+        super(VGG_AnyDepth, self).__init__()
+        self.features, last_channels = self._make_features(channel_dict)
+        self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
+
+        # FOR IMAGENET
+        self.classifier = nn.Sequential(
+            nn.Linear(last_channels * 7 * 7, 4096),
+            nn.ReLU(True),
+            nn.Dropout(),
+            nn.Linear(4096, 4096),
+            nn.ReLU(True),
+            nn.Dropout(),
+            nn.Linear(4096, num_classes)
+        )
+
+        # FOR CIFAR
+        # self.classifier = nn.Sequential(
+        #     nn.Linear(last_channels * 7 * 7, 512),
+        #     nn.ReLU(True),
+        #     nn.Dropout(),
+        #     nn.Linear(512, 512),
+        #     nn.ReLU(True),
+        #     nn.Dropout(),
+        #     nn.Linear(512, num_classes))
+
+    def _make_features(self, channel_dict):
+        layers = []
+        last_channels = None
+
+        sorted_keys = sorted(channel_dict.keys(), key=lambda x: int(x.split('.')[1]))
+
+        for key in sorted_keys:
+            out_ch, in_ch = channel_dict[key]
+            idx = int(key.split('.')[1])
+
+             # Special handling for the first layer: always 3 input channels
+            if key == 'features.0':
+                in_ch = 3
+
+            if in_ch is not None and out_ch is not None:
+                layers.append(nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1, bias=False))
+                layers.append(nn.BatchNorm2d(out_ch))
+                layers.append(nn.ReLU(inplace=True))
+                last_channels = out_ch
+
+            # Optional: Add pooling at typical VGG locations
+            if str(idx) in {'4', '11', '21', '31', '41'}:
+                layers.append(nn.MaxPool2d(kernel_size=2, stride=2))
+
+        return nn.Sequential(*layers), last_channels
+
+    def forward(self, x):
+        x = self.features(x)
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.classifier(x)
+        return x

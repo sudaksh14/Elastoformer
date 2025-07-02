@@ -5,9 +5,9 @@
 #SBATCH --job-name=simple
 #SBATCH --partition=all
 #SBATCH --gres=gpu:1
-#SBATCH --mem=128G
+#SBATCH --mem=64G
 #SBATCH --cpus-per-task=16
-#SBATCH --constraint="3090|A5000|titan_rtx"         # Request Specific GPUs (modify if needed)
+#SBATCH --constraint="3090|A5000|titan_rtx|1080_ti"         # Request Specific GPUs (modify if needed)
 #SBATCH --output=./outputs/slurm_output_%A.out
 #SBATCH --exclude=ivi-cn005,ivi-cn009,ivi-cn010,ivi-cn011,ivi-cn012,ivi-cn001
 #SBATCH --export=ALL,WANDB_API_KEY=dfcd2574507b9ebe69ca13ab6f6925d864e82ee0
@@ -35,7 +35,8 @@ nvidia-smi
 
 # srun python datasets.py
 # srun python compare_tensor.py
-srun python latency.py
+# srun python latency.py
+srun python switching.py
 
 # srun python ViT_iterative_adaptivity.py \
 #     --exp_name ViT_Iter_Adaptivity_imagenette \

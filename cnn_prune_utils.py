@@ -885,7 +885,7 @@ def get_model_info_core(pruned_weights=None, non_pruned_weights=None):
 
     return model_info
 
-def get_model_info_v2(pruned_index=None, non_pruned_index=None, core_model=False):
+def get_model_info_resnet(pruned_index=None, non_pruned_index=None):
     """
     Extracts the channel dimensions for each Conv and BatchNorm layer in a ResNet model.
 
@@ -939,6 +939,40 @@ def get_model_info_v2(pruned_index=None, non_pruned_index=None, core_model=False
             model_info[layer_name] = (layer_info["out_channels"], layer_info["in_channels"]) if "out_channels" in layer_info else (layer_info["num_features"], None)
 
     return model_info
+
+def get_model_info_vgg(pruned_index=None, non_pruned_index=None):
+    """
+    Extracts the channel dimensions for each Conv and BatchNorm layer in a ResNet model.
+
+    Args:
+        pruned_weights (dict): Dictionary of pruned weights.
+        non_pruned_weights (dict): Dictionary of non-pruned weights.
+        core_model (bool): Whether to use core model only (no pruned weights).
+
+    Returns:
+        dict: Dictionary with channel sizes for each layer.
+    """
+    model_info = {}
+
+    for layer_name, layer_index in non_pruned_index[1].items():
+        layer_info = {}
+
+        out_non_pruned = layer_index
+        out_pruned = pruned_index[1].get(layer_name, {})
+        in_non_pruned = non_pruned_index[0].get(layer_name, {})
+        in_pruned = pruned_index[0].get(layer_name, {})
+
+        layer_info["out_channels"] = len(out_non_pruned) + len(out_pruned)
+        layer_info["in_channels"] = len(in_non_pruned) + len(in_pruned)
+
+        if layer_name == 'features.0':
+            layer_info["in_channels"] = 3
+
+        if layer_info:
+            model_info[layer_name] = (layer_info["out_channels"], layer_info["in_channels"]) if layer_info["in_channels"] > 0 else (layer_info["out_channels"], None)
+
+    return model_info
+
 
 # Merge and create new continuous indices / Very Imp for Iterative Growth
 def merge_and_remap_indices(pruned, non_pruned):
@@ -994,7 +1028,7 @@ def update_global_weights(model, pruned_indices_list, non_pruned_indices_list, p
 
 
         if isinstance(layer, nn.Conv2d):
-            if layer_name == "conv1":	
+            if layer_name == "conv1" or layer_name == 'features.0':	
                 
                 pruned_dim0, non_pruned_dim0, _ = merge_and_remap_indices(pruned_out[layer_name], non_pruned_out[layer_name])
 
@@ -1058,6 +1092,7 @@ def update_global_weights(model, pruned_indices_list, non_pruned_indices_list, p
         elif isinstance(layer, nn.BatchNorm2d):
             pruned_dim0, non_pruned_dim0, _ = merge_and_remap_indices(pruned_out[layer_name], non_pruned_out[layer_name])
             # print("----------------------------------")
+            # print(layer)
             # print(weight.shape)
             # print(layer_name)
             # print(pruned_dim0, len(pruned_dim0))
@@ -1114,7 +1149,7 @@ def freeze_partial_weights_cnn(model, in_indices, out_indices, device='cuda' if 
             continue
 
         elif isinstance(layer, nn.Conv2d):
-            if layer_name == "conv1":
+            if layer_name == "conv1" or layer_name == 'features.0':
                 freeze_dim0 = torch.tensor(out_indices[layer_name], dtype=torch.long, device=device)
                 freeze_conv2d_params(layer, weight_indices=freeze_dim0)
             else:

@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH -t 165:00:00
-#SBATCH --ntasks=2
+#SBATCH --ntasks=1
 #SBATCH --nodes=1
 #SBATCH --job-name=simple
 #SBATCH --account=all6000users
 #SBATCH --partition=all6000
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:1
 #SBATCH --mem=128G
 #SBATCH --cpus-per-task=16
 #SBATCH --output=./outputs/slurm_output_%A.out
@@ -33,14 +33,14 @@ export TORCH_USE_CUDA_DSA=1
 
 nvidia-smi
 
-# srun python compare_tensor.py
-
+# srun python latency.py
+srun python switching.py
 
 # srun python cnn_iterative_adaptivity.py \
-#     --exp_name Resnet50_Iter_Adaptivity_cifar10 \
+#     --exp_name VGG_Iter_Adaptivity_cifar10 \
 #     --dataset_name cifar10 \
-#     --model_name resnet50 \
-#     --weights ResNet50_Weights.IMAGENET1K_V2 \
+#     --model_name vgg16_bn \
+#     --weights VGG16_BN_Weights.IMAGENET1K_V1 \
 #     --pruning_type l1 \
 #     --pruning_ratio 0.5 \
 #     --iterative --pruning_steps 5 \
@@ -51,30 +51,30 @@ nvidia-smi
 #     --save_as saves/state_dicts/ \
 #     --test_accuracy \
 #     --rebuild \
-#     --epochs 100 --core_epochs 100 --lr-warmup-epochs 5 --lr 0.05 \
-#     --mixup-alpha 0.8 --core_weight_decay 1e-4 --stochastic_depth \
+#     --epochs 50 --core_epochs 50 --lr-warmup-epochs 5 --lr 5e-4 \
+#     --mixup-alpha 0.8 --core_weight_decay 0.05 \
 #     --clip-grad-norm 1 --amp --ra-sampler \
 #     --distributed --model-ema --log_wandb \
 
 
-srun python ViT_iterative_adaptivity.py \
-    --exp_name deit_Iter_Adaptivity_cifar10 \
-    --dataset_name cifar10 \
-    --model_name facebook/deit-base-patch16-224 \
-    --pruning_type l1 \
-    --pruning_ratio 0.5 \
-    --iterative --pruning_steps 5 \
-    --taylor_batchs 10 \
-    --data_path /nvmestore/koelma/pytorch_work/ilsvrc2012/ \
-    --train_batch_size 128 \
-    --val_batch_size 128 \
-    --save_as saves/state_dicts/ \
-    --test_accuracy \
-    --rebuild \
-    --epochs 50 --core_epochs 50 --lr-warmup-epochs 5 --lr 5e-4 \
-    --mixup-alpha 0.8 --core_weight_decay 0.05 --stochastic_depth \
-    --clip-grad-norm 1 --amp --ra-sampler \
-    --distributed --model-ema --log_wandb \
+# srun python ViT_iterative_adaptivity.py \
+#     --exp_name deit_Iter_Adaptivity_cifar10 \
+#     --dataset_name cifar10 \
+#     --model_name facebook/deit-base-patch16-224 \
+#     --pruning_type l1 \
+#     --pruning_ratio 0.5 \
+#     --iterative --pruning_steps 5 \
+#     --taylor_batchs 10 \
+#     --data_path /nvmestore/koelma/pytorch_work/ilsvrc2012/ \
+#     --train_batch_size 128 \
+#     --val_batch_size 128 \
+#     --save_as saves/state_dicts/ \
+#     --test_accuracy \
+#     --rebuild \
+#     --epochs 50 --core_epochs 50 --lr-warmup-epochs 5 --lr 5e-4 \
+#     --mixup-alpha 0.8 --core_weight_decay 0.05 --stochastic_depth \
+#     --clip-grad-norm 1 --amp --ra-sampler \
+#     --distributed --model-ema --log_wandb \
 
 
 # ----------------------Imagenet----------------------
@@ -82,10 +82,10 @@ srun python ViT_iterative_adaptivity.py \
 # srun python ViT_iterative_adaptivity.py \
 #     --exp_name ViT_Iter_Adaptivity_test_multistep \
 #     --dataset_name imagenet \
-#     --model_name google/vit-base-patch16-224 \
+#     --model_name facebook/deit-base-patch16-224 \
 #     --pruning_type l1 \
-#     --pruning_ratio 0.8 \
-#     --iterative --pruning_steps 10 \
+#     --pruning_ratio 0.5 \
+#     --iterative --pruning_steps 5 \
 #     --taylor_batchs 10 \
 #     --data_path /nvmestore/koelma/pytorch_work/ilsvrc2012/ \
 #     --train_batch_size 128 \
@@ -96,7 +96,7 @@ srun python ViT_iterative_adaptivity.py \
 #     --epochs 20 --core_epochs 20 --lr-warmup-epochs 0 \
 #     --mixup-alpha 0.8 --core_weight_decay 0.05 --stochastic_depth \
 #     --clip-grad-norm 1 --amp --ra-sampler \
-#     --debug \
+#     --distributed --model-ema \
 
 
 # srun python cnn_iterative_adaptivity.py \

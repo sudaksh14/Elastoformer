@@ -6,6 +6,7 @@ import torchvision
 import torch.nn.functional as F
 import torch_pruning as tp
 from models.Resnet import *
+from models.VGG import *
 import warnings
 from torchvision.datasets import ImageFolder
 import torchvision.datasets as datasets
@@ -18,7 +19,7 @@ import imgaug_presets
 from copy import deepcopy
 # from models.hf_vit import create_vit_general
 from prune_utils import *
-from cnn_prune_utils import get_resnet_layer_sizes, extract_weight_subsets, extract_core_weights, get_model_info_core, get_model_info_v2, update_global_weights, freeze_partial_weights_cnn, inject_stochastic_depth_resnet
+from cnn_prune_utils import get_resnet_layer_sizes, extract_weight_subsets, extract_core_weights, get_model_info_core, get_model_info_resnet, update_global_weights, freeze_partial_weights_cnn, inject_stochastic_depth_resnet, get_model_info_vgg
 from trainer import fine_tuner, evaluate, fine_tuner_core
 from sampler import RASampler
 import utils
@@ -402,7 +403,10 @@ def main(args):
     # Load the model
     model = torchvision.models.get_model(args.model_name, weights=args.weights, num_classes=1000)
     if args.dataset_name.startswith('cifar'):
-        model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
+        if args.model_name.startswith('resnet'):
+            model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
+        else:
+            model.classifier[-1] = torch.nn.Linear(4096, num_classes)
     model = model.to(device)
 
 
@@ -446,7 +450,9 @@ def main(args):
     print("Pruning %s..."%args.model_name)
     ignored_layers = []
     for m in model.modules():
-        if isinstance(m, nn.Linear) and m.out_features == num_classes:
+        # if isinstance(m, nn.Linear) and m.out_features == num_classes:
+        #     ignored_layers.append(m)
+        if isinstance(m, nn.Linear):
             ignored_layers.append(m)
 
     print("Ignored Layers:", ignored_layers)
@@ -681,9 +687,15 @@ def main(args):
 
             rebuilding_index = [non_pruned_index_in[args.pruning_steps-i-1], non_pruned_index_out[args.pruning_steps-i-1]]
             pruned_index = [pruned_index_in[args.pruning_steps-i-1], pruned_index_out[args.pruning_steps-i-1]]
-            rebuild_dim = get_model_info_v2(pruned_index, rebuilding_index)
+            
+            if args.model_name.startswith('resnet'):
+                rebuild_dim = get_model_info_resnet(pruned_index, rebuilding_index)
+                rebuilt_model = resnet_generator(arch="resnet50", channel_dict=rebuild_dim, num_classes=num_classes).to(device)
+            else:
+                rebuild_dim = get_model_info_vgg(pruned_index, rebuilding_index)
+                rebuilt_model = VGG_AnyDepth(rebuild_dim, num_classes=num_classes).to(device) 
+            
             print("Model Info:", rebuild_dim)
-            rebuilt_model = resnet_generator(arch="resnet50", channel_dict=rebuild_dim, num_classes=num_classes).to(device)
             rebuilt_model,_,non_pruned_index_mapped = update_global_weights(rebuilt_model, pruned_index, rebuilding_index, 
                                                     pruned_weights_recorder[f"Level_{i+2}"], non_pruned_weights_recorder[f"Level_{i+2}"], device=device)
             

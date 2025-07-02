@@ -3,8 +3,8 @@
 #SBATCH -t 165:00:00
 #SBATCH --partition=all           # Change based on cluster
 #SBATCH --nodes=2                 # Number of nodes
-#SBATCH --ntasks-per-node=3       # One task per node
-#SBATCH --gres=gpu:3              # GPUs per node (adjust if needed)
+#SBATCH --ntasks-per-node=4       # One task per node
+#SBATCH --gres=gpu:4              # GPUs per node (adjust if needed)
 #SBATCH --mem=248G                # Memory per node
 #SBATCH --cpus-per-task=12        # CPU cores per task
 #SBATCH --constraint="3090|A5000|titan_rtx"         # Request Specific GPUs (modify if needed)
@@ -39,7 +39,7 @@ nvidia-smi
 #     --model_name facebook/deit-base-patch16-224 \
 #     --pruning_type l1 \
 #     --pruning_ratio 0.5 \
-#     --iterative --pruning_steps 6 \
+#     --iterative --pruning_steps 5 \
 #     --taylor_batchs 10 \
 #     --data_path /ssdstore/ImageNet/ \
 #     --train_batch_size 128 \
@@ -53,14 +53,34 @@ nvidia-smi
 #     --distributed --model-ema --log_wandb \
 
 
+# srun python cnn_iterative_adaptivity.py \
+#     --exp_name Resnet50_Iter_Adaptivity_noSD \
+#     --dataset_name imagenet \
+#     --model_name resnet50 \
+#     --weights ResNet50_Weights.IMAGENET1K_V2 \
+#     --pruning_type l1 \
+#     --pruning_ratio 0.5 \
+#     --iterative --pruning_steps 5 \
+#     --taylor_batchs 10 \
+#     --data_path /ssdstore/ImageNet/ \
+#     --train_batch_size 128 \
+#     --val_batch_size 128 \
+#     --save_as saves/state_dicts/ \
+#     --test_accuracy \
+#     --rebuild \
+#     --epochs 20 --core_epochs 20 --lr-warmup-epochs 5 --lr 1e-3 \
+#     --mixup-alpha 0.8 --core_weight_decay 0.05 \
+#     --clip-grad-norm 1 --amp --ra-sampler \
+#     --distributed --model-ema --log_wandb \
+
 srun python cnn_iterative_adaptivity.py \
-    --exp_name Resnet50_Iter_Adaptivity_50ep \
-    --dataset_name imagenet \
-    --model_name resnet50 \
-    --weights ResNet50_Weights.IMAGENET1K_V2 \
+    --exp_name VGG_Iter_Adaptivity_cifar100 \
+    --dataset_name cifar100 \
+    --model_name vgg16_bn \
+    --weights VGG16_BN_Weights.IMAGENET1K_V1 \
     --pruning_type l1 \
     --pruning_ratio 0.5 \
-    --iterative --pruning_steps 6 \
+    --iterative --pruning_steps 5 \
     --taylor_batchs 10 \
     --data_path /ssdstore/ImageNet/ \
     --train_batch_size 128 \
@@ -69,7 +89,7 @@ srun python cnn_iterative_adaptivity.py \
     --test_accuracy \
     --rebuild \
     --epochs 50 --core_epochs 50 --lr-warmup-epochs 5 --lr 5e-4 \
-    --mixup-alpha 0.8 --core_weight_decay 1e-4 --stochastic_depth \
+    --mixup-alpha 0.8 --core_weight_decay 0.05 \
     --clip-grad-norm 1 --amp --ra-sampler \
     --distributed --model-ema --log_wandb \
 
