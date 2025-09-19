@@ -571,6 +571,7 @@ def main(args):
         print("Testing accuracy of the original model...")
         acc_ori, loss_ori = evaluate(orig_copy, criterion, val_loader, device=device, dist=args.distributed)
         print("Accuracy: %.4f, Loss: %.4f"%(acc_ori, loss_ori))
+        exit()
     
     print("Pruning %s..."%args.model_name)
     num_heads = {}

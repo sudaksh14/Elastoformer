@@ -4,6 +4,9 @@
 *.png
 *.pth
 *.ipynb
+batch_all6000.job
+batch_multi.job
+batch_single.job
 
 # ignore directories
 __pycache__/

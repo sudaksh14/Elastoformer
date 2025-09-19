@@ -1,5 +1,5 @@
-# Pruning Image Classifiers
-Here we provide the code for pruning ConvNeXt and ViT. This part is built on the [dropout](https://github.com/facebookresearch/dropout) repository.
+# Elastoformer
+Here we provide the code for Elastoformer: Enabling Dynamic Adaptivity via Elastic Model Transformation
 
 ## Environment
 We additionally install `timm` for loading pretrained image classifiers.
