@@ -14,3 +14,4 @@ model_weights/
 saves/
 outputs/
 wandb/
+hf_deit3_base_patch16_224/

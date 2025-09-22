@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 import torch_pruning as tp
 from transformers.models.vit.modeling_vit_pruned import PrunedViTSelfAttention, ViTSelfOutput, ViTLayer, ViTForImageClassification, ViTModel, ViTConfig
+# from transformers.models.vit.modeling_vit import ViTSelfAttention, ViTSelfOutput, ViTLayer, ViTForImageClassification, ViTModel, ViTConfig
 import transformers
 from transformers import AutoConfig, AutoModelForImageClassification
 import warnings
@@ -522,12 +523,12 @@ def main(args):
         train_loader, val_loader, train_sampler, val_sampler, num_classes = get_cifar_dataloaders(dataset=args.dataset_name, batch_size=args.train_batch_size, distributed=args.distributed)
     
     # Load the model
-    model = ViTForImageClassification.from_pretrained(args.model_name)
+    model = ViTForImageClassification.from_pretrained(args.model_name, pruned_dim=384)
     if args.dataset_name.startswith('cifar'):
         model.classifier = nn.Linear(model.config.hidden_size, num_classes)
     model = model.to(device)
 
-    # Fine-Tune the Orignal Model (ONLY FOR IMAGENETTE)
+    # Fine-Tune the Orignal Model (IF REQUIRED, ONLY FOR IMAGENETTE)
     if False:
         for param in model.vit.parameters():
             param.requires_grad = False
@@ -570,8 +571,7 @@ def main(args):
         criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
         print("Testing accuracy of the original model...")
         acc_ori, loss_ori = evaluate(orig_copy, criterion, val_loader, device=device, dist=args.distributed)
-        print("Accuracy: %.4f, Loss: %.4f"%(acc_ori, loss_ori))
-        exit()
+        print("Accuracy: %.4f %%, Loss: %.4f" % (acc_ori, loss_ori))
     
     print("Pruning %s..."%args.model_name)
     num_heads = {}
