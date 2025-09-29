@@ -6,11 +6,13 @@ from prune_utils import get_vit_info, merge_and_remap_indices
 from transformers.models.vit.modeling_vit_pruned import ViTForImageClassification
 from cnn_prune_utils import resnet_generator
 import torchvision
+import json
+import pickle
 
 
 def load_vit_model(state_dict_path=None, device='cuda'):
     if state_dict_path:
-        state_dict = torch.load(state_dict_path, map_location=device)
+        state_dict = torch.load(state_dict_path, map_location='cpu', weights_only=False)
         
     model_info = get_vit_info(non_pruned_weights=state_dict, core_model=True)
     model = create_vit_general(dim_dict=model_info)
@@ -228,41 +230,74 @@ if __name__ == "__main__":
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     # device = 'cpu'
-    paths = ["./saves/state_dicts/Vit_b_16_Core_Level_1_state_dict_ViT_Iter_Adaptivity_test_multistep.pth"] + \
-            [f"./saves/state_dicts/Vit_b_16_Rebuilt_Level_{i}_state_dict_ViT_Iter_Adaptivity_test_multistep.pth" for i in range(2,7)]
+    paths = ["/var/scratch/skalra/elastoformer_saves/state_dicts/Vit_b_16_Core_Level_1_state_dict_Exp_switching.pth"] + \
+            [f"/var/scratch/skalra/elastoformer_saves/state_dicts/Vit_b_16_Rebuilt_Level_{i}_state_dict_Exp_switching.pth" for i in range(2,7)]
+            
     
-    configs = []
-    for sd in paths:
-        configs.append(get_vit_info(non_pruned_weights = torch.load(sd, map_location=device), core_model=True))
+    
+    # for i, state_dict_path in enumerate(paths):
+    #     print(f"Loading model from: {state_dict_path}")
+    #     model = load_vit_model(state_dict_path, device=device)
+    #     torch.save(model, f"/var/scratch/skalra/elastoformer_saves/state_dicts/Elastoformer_Level_{i+1}.pth")
+    #     print(f"✅ Model saved as Level-{i+1}")
+        
+    # exit()
+    
+    # configs = []
+    # for sd in paths:
+    #     configs.append(get_vit_info(non_pruned_weights = torch.load(sd, map_location=device), core_model=True))
+        
+    json_path = "/var/scratch/skalra/elastoformer_saves/configs/Exp_switching_configs.json"
+    pkl_path = "/var/scratch/skalra/elastoformer_saves/configs/Exp_switching_configs.pkl"
+    
+    # with open(json_path, "w") as f:
+    #     json.dump(configs, f)
+        
+    # with open(pkl_path, "wb") as f:
+    #     pickle.dump(configs, f)
+        
+    # exit()
 
-    metadata_paths = [f"./saves/pruning_metadata/ViT_Iter_Adaptivity_test_multistep_pruning_metadata_Level_{i}.pth" for i in range(2,7)]
+    metadata_paths = [f"/var/scratch/skalra/elastoformer_saves/pruning_metadata/Exp_switching_pruning_metadata_Level_{i}.pth" for i in range(2,7)]
 
-    print("------------------------------------CUSTOM INIT--------------------------------------")
+    print("------------------------------------ELASTOFORMER--------------------------------------")
     for i in range(4):
         print(f"Initializing model for level {i+1}...")
-        print(f"Config: {configs[i+1]}")
-        
-        core_model = create_vit_general(dim_dict=configs[i])
-        metadata = torch.load(metadata_paths[-1-i], map_location=device)
+        metadata = torch.load(metadata_paths[-1-i], map_location=device, weights_only=False)
+        # metadata = torch.load(metadata_paths[i+1], map_location='cpu', weights_only=False)
 
         
-        start_time = time.perf_counter()
-        for _ in range(50):
-            big_model = create_vit_general(dim_dict=configs[i+1]).to(device)
-            big_model = update_vit_weights_global(model=big_model, pruned_indices_list=metadata["pruned_index"], non_pruned_indices_list=metadata["non_pruned_index"],
-                                                    pruned_weights_dict=metadata["weights"], non_pruned_weights_dict=core_model.state_dict(), device=device)
+        with open(json_path, "r") as f:
+            configs = json.load(f)
+            print(f"Config: {configs[i+1]}")
+            core_model = create_vit_general(dim_dict=configs[i])
+            torch.cuda.synchronize()
+            start_time = time.perf_counter()
+            for _ in range(100):
+                # big_model = create_vit_general(dim_dict=configs[i+1]).to(device)
+                big_model = create_vit_general(dim_dict=configs[i+1])
+                big_model = update_vit_weights_global(model=big_model, pruned_indices_list=metadata["pruned_index"], non_pruned_indices_list=metadata["non_pruned_index"],
+                                                        pruned_weights_dict=metadata["weights"], non_pruned_weights_dict=core_model.state_dict(), device=device)
+                big_model.eval()
             
-        end_time = time.perf_counter()
-        print(f"✅ Model initialized in {(end_time - start_time):.4f} seconds.")
+            torch.cuda.synchronize()    
+            end_time = time.perf_counter()
+        print(f"✅ Model initialized in {(end_time - start_time)/100:.4f} seconds.")
 
-    print("------------------------------------STATE DICTS--------------------------------------")
-    for state_dict_path in paths:
-        print(f"Loading model from: {state_dict_path}")
+    print("------------------------------------INDEPENDENT MODELS--------------------------------------")
+    model_paths = [f"/var/scratch/skalra/elastoformer_saves/state_dicts/Elastoformer_Level_{i}.pth" for i in range(1,7)]
+            
+    for path in model_paths:
+        print(f"Loading model from: {path}")
+        torch.cuda.synchronize()
         start_time = time.perf_counter()
-        for _ in range(50):
-            model = load_vit_model(state_dict_path, device=device)
+        for _ in range(100):
+            model = torch.load(path, weights_only=False).to(device)
+            model.eval()
+        torch.cuda.synchronize()
         end_time = time.perf_counter()
-        print(f"✅ Model initialized in {(end_time - start_time):.4f} seconds.")
+        print(f"✅ Model initialized in {(end_time - start_time)/100:.4f} seconds.")
+    
     
 
 

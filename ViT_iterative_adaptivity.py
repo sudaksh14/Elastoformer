@@ -28,6 +28,8 @@ import argparse
 from aug_transforms import get_mixup_cutmix
 from torch.utils.data.dataloader import default_collate
 
+from datasets import load_imagenet
+
 torch.manual_seed(42)
 
 def get_args_parser(add_help=True):
@@ -44,7 +46,7 @@ def get_args_parser(add_help=True):
     parser.add_argument('--data_path', default='data/imagenet', type=str, help='model name')
     parser.add_argument('--taylor_batchs', default=10, type=int, help='number of batchs for taylor criterion')
     parser.add_argument('--pruning_ratio', default=0.5, type=float, help='prune ratio')
-    parser.add_argument('--iterative', default=False, action='store_true', help='True for Iterative Pruning')
+    parser.add_argument('--iterative', default=True, action='store_true', help='True for Iterative Pruning')
     parser.add_argument('--pruning_steps', default=1, type=int, help='number of Prune steps/Adaptive modes')
     parser.add_argument('--bottleneck', default=False, action='store_true', help='bottleneck or uniform')
     parser.add_argument('--pruning_type', default='l1', type=str, help='pruning type', choices=['random', 'taylor', 'l1', 'l2', 'hessian'])
@@ -125,7 +127,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--lr-gamma", default=0.1, type=float, help="decrease lr by a factor of lr-gamma")
     parser.add_argument("--lr-min", default=0.0, type=float, help="minimum lr of lr schedule (default: 0.0)")
     parser.add_argument("--print-freq", default=10, type=int, help="print frequency")
-    parser.add_argument("--output-dir", default="./saves/Checkpoints/", type=str, help="path to save outputs")
+    parser.add_argument("--output-dir", default="/var/scratch/skalra/elastoformer_saves/Checkpoints/", type=str, help="path to save outputs")
     parser.add_argument("--resume", default="", type=str, help="path of checkpoint")
     parser.add_argument("--start-epoch", default=0, type=int, metavar="N", help="start epoch")
     parser.add_argument(
@@ -201,6 +203,34 @@ def get_args_parser(add_help=True):
     parser.add_argument("--use-v2", action="store_true", help="Use V2 transforms")
     parser.add_argument("--log_wandb", action="store_true", help="Use Weights and Bias to log the training curves")
     return parser
+
+def load_dummy_data(
+    num_classes: int = 1000,
+    num_train: int = 1024,
+    num_test: int = 512,
+    image_size: tuple[int, int, int] = (3, 224, 224),
+    batch_size: int = 512,
+    distributed=True
+):
+    """
+    Generates dummy data loaders mimicking ImageNet.
+    """
+
+    # Helper to create random tensors
+    def make_dataset(num_samples):
+        images = torch.randn(num_samples, *image_size)
+        labels = torch.randint(0, num_classes, (num_samples,))
+        return torch.utils.data.TensorDataset(images, labels)
+
+    train_dataset = make_dataset(num_train)
+    test_dataset = make_dataset(num_test)
+
+
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+
+    print(f"Dummy dataloaders created, BS:{batch_size}")
+    return train_loader, test_loader, num_classes
 
 
 def prepare_imagenet(imagenet_root, train_batch_size=64, val_batch_size=128, num_workers=4, use_imagenet_mean_std=True, debug=False):
@@ -337,8 +367,8 @@ def compare_performance(args):
     device = torch.device(args.device)
     criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
 
-    path_core = f"./saves/state_dicts/Vit_b_16_Pruned_{args.pruning_ratio}_state_dict.pth"
-    path_rebuilt = f"./saves/state_dicts/Vit_b_16_Rebuilt_{args.pruning_ratio}_state_dict.pth"
+    path_core = f"/var/scratch/skalra/elastoformer_saves/state_dicts/Vit_b_16_Pruned_{args.pruning_ratio}_state_dict.pth"
+    path_rebuilt = f"/var/scratch/skalra/elastoformer_saves/state_dicts/Vit_b_16_Rebuilt_{args.pruning_ratio}_state_dict.pth"
 
     prune_dict = torch.load(path_core, map_location=device)
     rebuilt_dict = torch.load(path_rebuilt, map_location=device)
@@ -515,14 +545,18 @@ def main(args):
         imp = tp.importance.GroupHessianImportance()
     else: raise NotImplementedError
 
+    if args.dataset_name.startswith('dummy'):
+        train_loader, val_loader, num_classes = load_dummy_data(batch_size=args.train_batch_size, distributed=args.distributed)
     if args.dataset_name.startswith('imagenet'):
-        train_loader, val_loader, train_sampler, val_sampler = prepare_imagenet(args.data_path, train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size, debug=args.debug)
-        num_classes = 1000
+        # train_loader, val_loader, train_sampler, val_sampler = prepare_imagenet(args.data_path, train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size, debug=args.debug)
+        train_loader, val_loader, num_classes = load_imagenet(datapath=args.data_path, batch_size=args.train_batch_size, distributed=args.distributed, ra_sampler=args.ra_sampler, debug=args.debug)
         # train_loader, val_loader, train_sampler, val_sampler = prepare_imagenette()
     if args.dataset_name.startswith('cifar'):
         train_loader, val_loader, train_sampler, val_sampler, num_classes = get_cifar_dataloaders(dataset=args.dataset_name, batch_size=args.train_batch_size, distributed=args.distributed)
     
+    
     # Load the model
+    # model = ViTForImageClassification.from_pretrained(args.model_name)
     model = ViTForImageClassification.from_pretrained(args.model_name, pruned_dim=384)
     if args.dataset_name.startswith('cifar'):
         model.classifier = nn.Linear(model.config.hidden_size, num_classes)
@@ -728,12 +762,12 @@ def main(args):
         #               "non_pruned_weights": non_pruned_weights,
         #               "pruned_indexes": [pruned_index_in[args.pruning_steps-i-1], pruned_index_out[args.pruning_steps-i-1]],
         #               "non_pruned_indexes": [non_pruned_index_in[args.pruning_steps-i-1], non_pruned_index_out[args.pruning_steps-i-1]]}
-        # torch.save(checkpoint, f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{args.pruning_steps + 1 - i}.pth")
+        # torch.save(checkpoint, f"/var/scratch/skalra/elastoformer_saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{args.pruning_steps + 1 - i}.pth")
 
         checkpoint = {"weights": pruned_weights,
                       "pruned_index": [pruned_index_in[args.pruning_steps-i-1], pruned_index_out[args.pruning_steps-i-1]],
                       "non_pruned_index": [non_pruned_index_in[args.pruning_steps-i-1], non_pruned_index_out[args.pruning_steps-i-1]]}
-        torch.save(checkpoint, f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{args.pruning_steps + 1 - i}.pth")
+        torch.save(checkpoint, f"/var/scratch/skalra/elastoformer_saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{args.pruning_steps + 1 - i}.pth")
 
         print(f"Pruning Metadata stored for Level-{args.pruning_steps + 1 - i}")
 
@@ -820,17 +854,17 @@ def main(args):
 
     # Fine-Tune the Core model
     print("================FINE-TUNING CORE MODEL/DESCENDANT MODEL LEVEL-1======================")
-    fine_tuner_core(args, device, model, train_loader, val_loader, train_sampler, val_sampler)
+    fine_tuner_core(args, device, model, train_loader, val_loader)
 
     """
     NOTE: Update the Core model weights after fine-tuning : 
     We update the non-pruned weights after pruning Level-2 model (Which is the core model)
     """
     updated_core_weights = extract_vit_core_weights(model)
-    # checkpoint = torch.load(f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_2.pth")
+    # checkpoint = torch.load(f"/var/scratch/skalra/elastoformer_saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_2.pth")
     # checkpoint["non_pruned_weights"] = updated_core_weights
     # checkpoint["classifier"] = [model.classifier.weight.detach().clone(), model.classifier.bias.detach().clone()]
-    # torch.save(checkpoint, f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_2.pth")
+    # torch.save(checkpoint, f"/var/scratch/skalra/elastoformer_saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_2.pth")
     non_pruned_weights_recorder["Level_2"] = updated_core_weights
     print("Updated Pruning Metadata for Level-2")
     
@@ -867,7 +901,7 @@ def main(args):
 
             rebuilding_weights = non_pruned_weights_recorder[f"Level_{i+2}"]
             pruned_weights = pruned_weights_recorder[f"Level_{i+2}"]
-            rebuild_dim = get_vit_info(pruned_weights, rebuilding_weights)
+            rebuild_dim = get_vit_info(pruned_weights, rebuilding_weights, num_heads=6)
             print("Model Info:", rebuild_dim)
             rebuilt_model = create_vit_general(dim_dict=rebuild_dim, num_classes=num_classes).to(device)
             rebuilt_model,_,non_pruned_index_mapped = update_vit_weights_global(rebuilt_model, [pruned_index_in[args.pruning_steps-i-1], pruned_index_out[args.pruning_steps-i-1]], 
@@ -892,14 +926,14 @@ def main(args):
 
             if args.stochastic_depth:
                 inject_stochastic_depth(rebuilt_model)
-            fine_tuner(args, device, rebuilt_model, train_loader, val_loader, train_sampler, val_sampler, rebuild=True, in_freeze_indices=non_pruned_index_mapped[0], out_freeze_indices=non_pruned_index_mapped[1])
+            fine_tuner(args, device, rebuilt_model, train_loader, val_loader, rebuild=True, in_freeze_indices=non_pruned_index_mapped[0], out_freeze_indices=non_pruned_index_mapped[1])
 
             if i < args.pruning_steps - 1:
                 updated_weights = extract_vit_core_weights(rebuilt_model)
-                # checkpoint = torch.load(f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{i+3}.pth")
+                # checkpoint = torch.load(f"/var/scratch/skalra/elastoformer_saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{i+3}.pth")
                 # checkpoint["non_pruned_weights"] = updated_weights
                 # checkpoint["classifier"] = [rebuilt_model.classifier.weight.detach().clone(), rebuilt_model.classifier.bias.detach().clone()]
-                # torch.save(checkpoint, f"./saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{i+3}.pth")
+                # torch.save(checkpoint, f"/var/scratch/skalra/elastoformer_saves/pruning_metadata/{args.exp_name}_pruning_metadata_Level_{i+3}.pth")
                 non_pruned_weights_recorder[f"Level_{i+3}"] = updated_weights
                 print(f"Updated Pruning Metadata for Level-{i+3}")
                 

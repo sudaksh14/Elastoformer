@@ -4,7 +4,7 @@ import time
 import warnings
 import wandb
 
-
+from typing import Iterable, Optional
 import imgaug_presets
 import torch
 import torch.utils.data
@@ -18,9 +18,10 @@ from torchvision.transforms.functional import InterpolationMode
 from aug_transforms import get_mixup_cutmix
 from prune_utils import selective_gradient_clipping_norm
 from cnn_prune_utils import selective_gradient_clipping_norm_cnn
+from datasets import mixup_fn
 
 
-def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None, CNN=False):
+def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None, CNN=False, mixup_fn=None):
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter("lr", utils.SmoothedValue(window_size=1, fmt="{value}"))
@@ -29,6 +30,8 @@ def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, arg
     header = f"Epoch: [{epoch}]"
     for i, (image, target) in enumerate(metric_logger.log_every(data_loader, args.print_freq, header)):
         start_time = time.time()
+        if mixup_fn is not None:
+            image, target = mixup_fn(image, target)
         image, target = image.to(device), target.to(device)
         with torch.autocast(device_type="cuda", enabled=scaler is not None):
             if CNN:
@@ -67,7 +70,7 @@ def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, arg
 
     return metric_logger
 
-def train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None, CNN=False):
+def train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None, CNN=False, mixup_fn=None):
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter("lr", utils.SmoothedValue(window_size=1, fmt="{value}"))
@@ -76,6 +79,8 @@ def train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criteri
     header = f"Epoch: [{epoch}]"
     for i, (image, target) in enumerate(metric_logger.log_every(data_loader, args.print_freq, header)):
         start_time = time.time()
+        if mixup_fn is not None:
+            image, target = mixup_fn(image, target)
         image, target = image.to(device), target.to(device)
         with torch.autocast(device_type="cuda", enabled=scaler is not None):
             if CNN:
@@ -172,106 +177,7 @@ def evaluate(model, criterion, data_loader, device, print_freq=100, log_suffix="
     return metric_logger.acc1.global_avg, metric_logger.loss.global_avg
 
 
-def _get_cache_path(filepath):
-    import hashlib
-
-    h = hashlib.sha1(filepath.encode()).hexdigest()
-    cache_path = os.path.join("~", ".torch", "vision", "datasets", "imagefolder", h[:10] + ".pt")
-    cache_path = os.path.expanduser(cache_path)
-    return cache_path
-
-
-def load_data(traindir, valdir, args):
-    # Data loading code
-    print("Loading data")
-    val_resize_size, val_crop_size, train_crop_size = (
-        args.val_resize_size,
-        args.val_crop_size,
-        args.train_crop_size,
-    )
-    interpolation = InterpolationMode(args.interpolation)
-
-    print("Loading training data")
-    st = time.time()
-    cache_path = _get_cache_path(traindir)
-    if args.cache_dataset and os.path.exists(cache_path):
-        # Attention, as the transforms are also cached!
-        print(f"Loading dataset_train from {cache_path}")
-        # TODO: this could probably be weights_only=True
-        dataset, _ = torch.load(cache_path, weights_only=False)
-    else:
-        # We need a default value for the variables below because args may come
-        # from train_quantization.py which doesn't define them.
-        auto_augment_policy = getattr(args, "auto_augment", None)
-        random_erase_prob = getattr(args, "random_erase", 0.0)
-        ra_magnitude = getattr(args, "ra_magnitude", None)
-        augmix_severity = getattr(args, "augmix_severity", None)
-        dataset = torchvision.datasets.ImageFolder(
-            traindir,
-            imgaug_presets.ClassificationPresetTrain(
-                crop_size=train_crop_size,
-                interpolation=interpolation,
-                auto_augment_policy=auto_augment_policy,
-                random_erase_prob=random_erase_prob,
-                ra_magnitude=ra_magnitude,
-                augmix_severity=augmix_severity,
-                backend=args.backend,
-                use_v2=args.use_v2,
-            ),
-        )
-        if args.cache_dataset:
-            print(f"Saving dataset_train to {cache_path}")
-            utils.mkdir(os.path.dirname(cache_path))
-            utils.save_on_master((dataset, traindir), cache_path)
-    print("Took", time.time() - st)
-
-    print("Loading validation data")
-    cache_path = _get_cache_path(valdir)
-    if args.cache_dataset and os.path.exists(cache_path):
-        # Attention, as the transforms are also cached!
-        print(f"Loading dataset_test from {cache_path}")
-        # TODO: this could probably be weights_only=True
-        dataset_test, _ = torch.load(cache_path, weights_only=False)
-    else:
-        if args.weights and args.test_only:
-            weights = torchvision.models.get_weight(args.weights)
-            preprocessing = weights.transforms(antialias=True)
-            if args.backend == "tensor":
-                preprocessing = torchvision.transforms.Compose([torchvision.transforms.PILToTensor(), preprocessing])
-
-        else:
-            preprocessing = imgaug_presets.ClassificationPresetEval(
-                crop_size=val_crop_size,
-                resize_size=val_resize_size,
-                interpolation=interpolation,
-                backend=args.backend,
-                use_v2=args.use_v2,
-            )
-
-        dataset_test = torchvision.datasets.ImageFolder(
-            valdir,
-            preprocessing,
-        )
-        if args.cache_dataset:
-            print(f"Saving dataset_test to {cache_path}")
-            utils.mkdir(os.path.dirname(cache_path))
-            utils.save_on_master((dataset_test, valdir), cache_path)
-
-    print("Creating data loaders")
-    if args.distributed:
-        if hasattr(args, "ra_sampler") and args.ra_sampler:
-            train_sampler = RASampler(dataset, shuffle=True, repetitions=args.ra_reps)
-        else:
-            train_sampler = torch.utils.data.distributed.DistributedSampler(dataset)
-        test_sampler = torch.utils.data.distributed.DistributedSampler(dataset_test, shuffle=False)
-    else:
-        train_sampler = torch.utils.data.RandomSampler(dataset)
-        test_sampler = torch.utils.data.SequentialSampler(dataset_test)
-
-    return dataset, dataset_test, train_sampler, test_sampler
-
-
-def fine_tuner(args, device, model, data_loader, data_loader_test, train_sampler, test_sampler, rebuild=False, in_freeze_indices=None, out_freeze_indices=None):
+def fine_tuner(args, device, model, data_loader, data_loader_test, rebuild=False, in_freeze_indices=None, out_freeze_indices=None):
     if args.output_dir:
         utils.mkdir(args.output_dir)
 
@@ -419,12 +325,12 @@ def fine_tuner(args, device, model, data_loader, data_loader_test, train_sampler
     print("Start training")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            train_sampler.set_epoch(epoch)
         if rebuild:
-            metrics = train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler, CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")))
+            metrics = train_one_epoch_freeze(model, in_freeze_indices, out_freeze_indices, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler, 
+                                             CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")), mixup_fn=mixup_fn)
         else:
-            metrics = train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler, CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")))
+            metrics = train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler, 
+                                      CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")), mixup_fn=mixup_fn)
         
         test_acc1,_ = evaluate(model, criterion, data_loader_test, device=device, dist=args.distributed, CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")))
         if model_ema:
@@ -470,7 +376,7 @@ def fine_tuner(args, device, model, data_loader, data_loader_test, train_sampler
     print(f"Training time {total_time_str}")
 
 
-def fine_tuner_core(args, device, model, data_loader, data_loader_test, train_sampler, test_sampler):
+def fine_tuner_core(args, device, model, data_loader, data_loader_test):
     if args.output_dir:
         utils.mkdir(args.output_dir)
 
@@ -614,10 +520,9 @@ def fine_tuner_core(args, device, model, data_loader, data_loader_test, train_sa
     print("Start training")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.core_epochs):
-        if args.distributed:
-            train_sampler.set_epoch(epoch)
 
-        metrics = train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler, CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")))
+        metrics = train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema, scaler, 
+                                  CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")), mixup_fn=mixup_fn)
         test_acc1,_ = evaluate(model, criterion, data_loader_test, device=device, dist=args.distributed, CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")))
         if model_ema:
             test_ema_acc1,_ = evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", dist=args.distributed, CNN=(args.model_name.startswith("resnet") or args.model_name.startswith("vgg")))

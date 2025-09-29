@@ -557,7 +557,10 @@ def get_vit_info(pruned_weights=None, non_pruned_weights=None, num_heads=None, c
                 vit_info["FFN_Output_Dim"] = layer_weights.shape[0] 
 
         vit_info["num_layers"] = max(int(key.split(".")[3]) for key in non_pruned_weights if key.startswith("vit.encoder.layer")) + 1
-        vit_info["num_heads"] = get_num_heads(vit_info["QKV_Dim_out"])
+        if num_heads is not None:
+            vit_info["num_heads"] = num_heads
+        else:
+            vit_info["num_heads"] = get_num_heads(vit_info["QKV_Dim_out"])
         return vit_info
 
     for layer_name, layer_weights in non_pruned_weights.items():
@@ -576,7 +579,10 @@ def get_vit_info(pruned_weights=None, non_pruned_weights=None, num_heads=None, c
             vit_info["FFN_Output_Dim"] = layer_weights["Weight"].shape[0] + pruned_weights[layer_name]["Weight"].shape[0]
 
     vit_info["num_layers"] = max(int(key.split(".")[3]) for key in non_pruned_weights if key.startswith("vit.encoder.layer")) + 1
-    vit_info["num_heads"] = get_num_heads(vit_info["QKV_Dim_out"])
+    if num_heads is not None:
+            vit_info["num_heads"] = num_heads
+    else:
+        vit_info["num_heads"] = get_num_heads(vit_info["QKV_Dim_out"])
     return vit_info
 
 def extract_vit_weight_subset(model, out_indices_dict, in_indices_dict):

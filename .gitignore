@@ -7,11 +7,14 @@
 batch_all6000.job
 batch_multi.job
 batch_single.job
+run_job.sh
+run_single.sh
 
 # ignore directories
 __pycache__/
 model_weights/
 saves/
 outputs/
+jobs/
 wandb/
 hf_deit3_base_patch16_224/
