@@ -34,7 +34,7 @@ if __name__ == '__main__':
     
     
     
-    model_timm = timm.create_model("vit_base_patch16_224", pretrained=True)
+    model_timm = timm.create_model("vit_base_patch16_224", pretrained=True).to(device)
     flops, params = tp.utils.count_ops_and_params(model_timm, example_inputs)
     
     # Load a pretrained model, can be any vit / deit model.

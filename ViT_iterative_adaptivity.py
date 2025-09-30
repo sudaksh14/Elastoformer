@@ -4,8 +4,8 @@ from typing import Dict, List, Optional, Set, Tuple, Union
 import torch
 import torch.nn.functional as F
 import torch_pruning as tp
-from transformers.models.vit.modeling_vit_pruned import PrunedViTSelfAttention, ViTSelfOutput, ViTLayer, ViTForImageClassification, ViTModel, ViTConfig
-# from transformers.models.vit.modeling_vit import ViTSelfAttention, ViTSelfOutput, ViTLayer, ViTForImageClassification, ViTModel, ViTConfig
+# from transformers.models.vit.modeling_vit_pruned import PrunedViTSelfAttention, ViTSelfOutput, ViTLayer, ViTForImageClassification, ViTModel, ViTConfig
+from elastoformer_vit.modeling_vit import ViTSelfAttention, ViTSelfOutput, ViTLayer, ViTForImageClassification, ViTModel, ViTConfig
 import transformers
 from transformers import AutoConfig, AutoModelForImageClassification
 import warnings
@@ -600,6 +600,8 @@ def main(args):
     else:
         base_size = get_model_size_mb(model)
     print(f"Orig MAC's: {base_macs/1e9:.2f} G, Orig Params: {base_params/1e6:.2f} M, Orig Size: {base_size:.2f} MB")
+    
+    exit()
     
     if args.test_accuracy:
         criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
