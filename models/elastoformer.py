@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Elastoformer ViT model built upon code at: """
+"""Elastoformer ViT model built on repo: https://github.com/huggingface/transformers/tree/main/src/transformers/models/vit"""
 
 from transformers.models.vit.modeling_vit import (
     ViTPreTrainedModel,
