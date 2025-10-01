@@ -599,8 +599,6 @@ def main(args):
         base_size = get_model_size_mb(model)
     print(f"Orig MAC's: {base_macs/1e9:.2f} G, Orig Params: {base_params/1e6:.2f} M, Orig Size: {base_size:.2f} MB")
     
-    exit()
-    
     if args.test_accuracy:
         criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
         print("Testing accuracy of the original model...")
