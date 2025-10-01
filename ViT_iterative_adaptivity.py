@@ -4,10 +4,7 @@ from typing import Dict, List, Optional, Set, Tuple, Union
 import torch
 import torch.nn.functional as F
 import torch_pruning as tp
-# from transformers.models.vit.modeling_vit_pruned import PrunedViTSelfAttention, ViTSelfOutput, ViTLayer, ViTForImageClassification, ViTModel, ViTConfig
-from elastoformer_vit.modeling_vit import ViTSelfAttention, ViTSelfOutput, ViTLayer, ViTForImageClassification, ViTModel, ViTConfig
-import transformers
-from transformers import AutoConfig, AutoModelForImageClassification
+from models.elastoformer import ElasticViTConfig, ElasticViTSelfAttention, ElasticViTSelfOutput, ElasticViTForImageClassification
 import warnings
 from torchvision.datasets import ImageFolder
 import torchvision.datasets as datasets
@@ -27,7 +24,6 @@ import math
 import argparse
 from aug_transforms import get_mixup_cutmix
 from torch.utils.data.dataloader import default_collate
-
 from datasets import load_imagenet
 
 torch.manual_seed(42)
@@ -360,7 +356,7 @@ def create_vit_general(img_size=(224,224), patch_size=(16,16), in_channels=3, em
         num_labels=num_classes)
 
     config.pruned_dim = qkv_dim
-    model = ViTForImageClassification(config)
+    model = ElasticViTForImageClassification(config)
     return model
 
 def compare_performance(args):
@@ -387,7 +383,7 @@ def compare_performance(args):
 
     _,val_loader,_,_ = prepare_imagenet(args.data_path, train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size)
 
-    original_model = ViTForImageClassification.from_pretrained(args.model_name).to(device)
+    original_model = ElasticViTForImageClassification.from_pretrained(args.model_name).to(device)
     pruned_model = create_vit_general(embed_dim=prune_embed, output_dim=prune_embed, ff_hidden_dim=prune_ff).to(device)
     rebuilt_model = create_vit_general(embed_dim=rebuilt_embed, output_dim=rebuilt_embed, ff_hidden_dim=rebuilt_ff).to(device)
 
@@ -556,8 +552,10 @@ def main(args):
     
     
     # Load the model
-    # model = ViTForImageClassification.from_pretrained(args.model_name)
-    model = ViTForImageClassification.from_pretrained(args.model_name, pruned_dim=384)
+    if "small" in args.model_name:
+        model = ElasticViTForImageClassification.from_pretrained(args.model_name, pruned_dim=384)
+    else:
+        model = ElasticViTForImageClassification.from_pretrained(args.model_name)
     if args.dataset_name.startswith('cifar'):
         model.classifier = nn.Linear(model.config.hidden_size, num_classes)
     model = model.to(device)
@@ -614,11 +612,11 @@ def main(args):
     ignored_layers = [model.classifier]
     # All heads should be pruned simultaneously, so we group channels by head.
     for m in model.modules():
-        if isinstance(m, PrunedViTSelfAttention):
+        if isinstance(m, ElasticViTSelfAttention):
             num_heads[m.query] = m.num_attention_heads
             num_heads[m.key] = m.num_attention_heads
             num_heads[m.value] = m.num_attention_heads
-        if args.bottleneck and isinstance(m, ViTSelfOutput):
+        if args.bottleneck and isinstance(m, ElasticViTSelfOutput):
             ignored_layers.append(m.dense) # only prune the internal layers of FFN & Attention
                 
     pruner = tp.pruner.BasePruner(
@@ -843,7 +841,7 @@ def main(args):
     # model = replace_all_vit_attention_blocks(model, out_dim=model_info["QKV_Dim_out"], num_heads=model_info["num_heads"])
 
     for id, m in enumerate(model.modules()):
-        if isinstance(m, transformers.models.vit.modeling_vit_pruned.PrunedViTSelfAttention):
+        if isinstance(m, ElasticViTSelfAttention):
             print("num_heads:", m.num_attention_heads, 'head_dims:', m.attention_head_size, 'all_head_size:', m.all_head_size, '=>')
             m.num_attention_heads = model_info["num_heads"]
             m.attention_head_size = m.query.out_features // m.num_attention_heads

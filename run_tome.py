@@ -3,6 +3,8 @@ from torch import nn
 import timm, tome
 from datasets import load_imagenet
 import torch_pruning as tp
+import tqdm
+from sklearn.metrics import accuracy_score
 
 
 def evaluate_model(model, dataloader, device):
@@ -24,28 +26,30 @@ def evaluate_model(model, dataloader, device):
             all_labels.extend(labels.cpu().numpy())
 
     accuracy = accuracy_score(all_labels, all_preds)
-    return accuracy * 100
+    print("Accuracy (%):", accuracy*100)
 
 if __name__ == '__main__':
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    _,_, test_loader = load_imagenet(datapath="/var/scratch/dchabal/quokka/data/imagenet", batch_size=512, distributed=False, ra_sampler=False, debug=True)
+    _,test_loader,_ = load_imagenet(datapath="/var/scratch/dchabal/quokka/data/imagenet", batch_size=512, distributed=False, ra_sampler=False, debug=False)
     example_inputs = torch.randn(1,3,224,224).to(device)
     
     
     
     model_timm = timm.create_model("vit_base_patch16_224", pretrained=True).to(device)
     flops, params = tp.utils.count_ops_and_params(model_timm, example_inputs)
+    print(f"FLOPs: {flops/1e9:.2f} G, Params: {params/1e6:.2f} M")
+    evaluate_model(model_timm, test_loader, device)
+    
+    
     
     # Load a pretrained model, can be any vit / deit model.
-    model_tome = timm.create_model("vit_base_patch16_224", pretrained=True)
+    model_tome = timm.create_model("vit_base_patch16_224", pretrained=True).to(device)
     # Patch the model with ToMe.
     tome.patch.timm(model_tome)
     # Set the number of tokens reduced per layer. See paper for details.
     model_tome.r = 13
     
     flops, params = tp.utils.count_ops_and_params(model_tome, example_inputs)
-    exit()
-    
-    evaluate_model(model_timm, test_loader, device)
+    print(f"FLOPs: {flops/1e9:.2f} G, Params: {params/1e6:.2f} M")
     evaluate_model(model_tome, test_loader, device)
