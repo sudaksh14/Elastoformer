@@ -25,9 +25,32 @@ python main.py \
     --clip-grad-norm 1 --amp --ra-sampler \
     --distributed --model-ema --log_wandb \
 ```
+Similarly for Elastic CNN's replace main.py with elastic_cnn.py:
+```
+python elastic_cnn.py \
+    --exp_name Elastic_Resnet50 \
+    --dataset_name imagenet \
+    --model_name resnet50 \
+    --weights ResNet50_Weights.IMAGENET1K_V2 \
+    --pruning_type l1 \
+    --pruning_ratio 0.5 \
+    --iterative --pruning_steps 5 \
+    --taylor_batchs 10 \
+    --data_path /nvmestore/koelma/pytorch_work/ilsvrc2012/ \
+    --train_batch_size 128 \
+    --val_batch_size 128 \
+    --save_as saves/state_dicts/ \
+    --test_accuracy \
+    --rebuild \
+    --epochs 50 --core_epochs 50 --lr-warmup-epochs 5 --lr 0.05 \
+    --mixup-alpha 0.8 --core_weight_decay 1e-4 --stochastic_depth \
+    --clip-grad-norm 1 --amp --ra-sampler \
+    --distributed --model-ema --log_wandb \
+```
 where:
 - `--dataset_name`: [`imagenet`, `cifar10`, `cifar100`, `dummy`].
-- `--model_name`: network architecture, choices [`facebook/deit-base-patch16-224`, `facebook/deit-small-patch16-224`, `google/vit_large_patch16_224`].
+- `--model_name`: `network architecture [DeiT: "facebook/deit-base-patch16-224", ViT: "google/vit-base-patch16-224", Resnet: "resnet50", VGG: "vgg16" etc..], (ViT models are named as per HuggingFace ModelHub https://huggingface.co/models)`
+- `--weights`: `Pre-trained weights identifier as per Torchvision (only applicable for CNNs/Torchvision models)` .
 - `--pruning_type`: [`l1`, `l2`, `taylor`, `hessian`].
 - `--pruning_ratio`: `Between (0,1) for the level of compression, 1 being max compression`.
 - `--iterative`: `Flag for multiple step of elasticity (always True)`.
