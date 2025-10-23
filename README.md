@@ -20,8 +20,8 @@ This capability allows you to generate a spectrum of models—from full-size to 
 
 ![Elastoformer Scheme](./images/scheme.png)
 
-| **Figure 1: The Elastoformer Scheme for Dynamic Model Adaptivity** |
-|:--:|
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;**Figure 1: The Elastoformer Scheme for Dynamic Model Adaptivity**
+
 
 ## Environment Setup
 1. Clone the repository:
