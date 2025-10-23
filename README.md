@@ -1,8 +1,18 @@
 # Elastoformer
-Here we provide the code for Elastoformer: Enabling Dynamic Adaptivity via Elastic Model Transformation
+Elastoformer enables dynamic adaptivity in deep neural networks via **elastic model transformation**. 
+It supports ViTs (like DeiT/Vit) and CNNs (ResNet, VGG) and allows **pruning, rebuilding, and deploying descendant networks** efficiently.
+![Elastoformer Scheme](./images/Elastoformer_Scheme.pdf)
 
-## Environment
-Install all dependencies in requirements.txt before cloning this repo
+## Environment Setup
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/elastoformer.git
+cd elastoformer
+```
+1. Install Dependencies:
+```bash
+pip install -r requirements.txt
+```
 
 ## Usage
 Here is the command for running the elastic transformation for DeiT:
@@ -56,3 +66,7 @@ where:
 - `--iterative`: `Flag for multiple step of elasticity (always True)`.
 - `--pruning_steps`: `Desired number of Descendant Networks (DNs), Note: # DN's = pruning_steps + 1`.
 - `--rebuild`: `Flag for retraining of DNs (always True)`.
+
+## References
+- [DeiT Paper](https://arxiv.org/abs/2012.12877)
+- [HuggingFace ViT Models](https://huggingface.co/models)
