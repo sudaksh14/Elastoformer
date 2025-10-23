@@ -10,6 +10,7 @@ from timm.models.vision_transformer import Attention
 import torch_pruning as tp
 import argparse
 
+# TO IMPLEMENT ELASTOFORMER FOR TIMM MODELS: ADAPT AS PER BELOW EXAMPLE
 parser = argparse.ArgumentParser(description='Prune timm models')
 parser.add_argument('--model', default=None, type=str, help='model name')
 parser.add_argument('--pruning_ratio', default=0.5, type=float, help='channel pruning ratio')

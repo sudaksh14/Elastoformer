@@ -1,32 +1,17 @@
 import os, sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))))
-from typing import Dict, List, Optional, Set, Tuple, Union
 import torch
 import torchvision
-import torch.nn.functional as F
 import torch_pruning as tp
 from models.Resnet import *
 from models.VGG import *
-import warnings
-from torchvision.datasets import ImageFolder
-import torchvision.datasets as datasets
-import torchvision.transforms as T
-from torchvision.transforms.functional import InterpolationMode
-import torchvision.models as models
-from torch.utils.data import SubsetRandomSampler, Subset
-from tqdm import tqdm
-import imgaug_presets
 from copy import deepcopy
-# from models.hf_vit import create_vit_general
-from prune_utils import *
-from cnn_prune_utils import get_resnet_layer_sizes, extract_weight_subsets, extract_core_weights, get_model_info_core, get_model_info_resnet, update_global_weights, freeze_partial_weights_cnn, inject_stochastic_depth_resnet, get_model_info_vgg
+from utils.prune_utils import *
+from utils.cnn_prune_utils import get_resnet_layer_sizes, extract_weight_subsets, extract_core_weights, get_model_info_core, get_model_info_resnet, update_global_weights, freeze_partial_weights_cnn, inject_stochastic_depth_resnet, get_model_info_vgg
 from trainer import fine_tuner, evaluate, fine_tuner_core
-from sampler import RASampler
-import utils
-import math
+import utils.train_utils as train_utils
 import argparse
-from aug_transforms import get_mixup_cutmix
-from torch.utils.data.dataloader import default_collate
+from datasets import load_imagenet, load_cifar, load_imagenette, load_dummy_data
 
 torch.manual_seed(42)
 
@@ -203,184 +188,17 @@ def get_args_parser(add_help=True):
     return parser
 
 
-def prepare_imagenet(imagenet_root, train_batch_size=64, val_batch_size=128, num_workers=4, use_imagenet_mean_std=True, debug=False):
-    """The imagenet_root should contain train and val folders.
-    """
-
-    print('Parsing dataset...')
-
-    auto_augment_policy = getattr(args, "auto_augment", None)
-    random_erase_prob = getattr(args, "random_erase", 0.0)
-    ra_magnitude = getattr(args, "ra_magnitude", None)
-    augmix_severity = getattr(args, "augmix_severity", None)
-
-    train_dst = ImageFolder(os.path.join(imagenet_root, 'train'),
-                            transform=imgaug_presets.ClassificationPresetTrain(
-                            crop_size=224,
-                            interpolation=InterpolationMode.BILINEAR,
-                            auto_augment_policy=auto_augment_policy,
-                            random_erase_prob=random_erase_prob,
-                            ra_magnitude=ra_magnitude,
-                            augmix_severity=augmix_severity,
-                            backend=args.backend,
-                            use_v2=args.use_v2,
-                        ),
-    )
-    
-
-    val_dst = ImageFolder(os.path.join(imagenet_root, 'val'), 
-                          transform=imgaug_presets.ClassificationPresetEval(
-                                mean=[0.485, 0.456, 0.406] if use_imagenet_mean_std else [0.5, 0.5, 0.5],
-                                std=[0.229, 0.224, 0.225] if use_imagenet_mean_std else [0.5, 0.5, 0.5],
-                                crop_size=224,
-                                resize_size=256,
-                                interpolation=InterpolationMode.BILINEAR,
-                            )
-    )
-
-    if debug:
-        train_dst = Subset(train_dst, indices=torch.randperm(len(train_dst))[:500])
-        val_dst = Subset(val_dst, indices=torch.randperm(len(val_dst))[:100])
-
-    # ADD CUTMIX AND MIXUP AUGMENTATIONS
-    mixup_cutmix = get_mixup_cutmix(
-        mixup_alpha=args.mixup_alpha, cutmix_alpha=args.cutmix_alpha, num_classes=1000, use_v2=args.use_v2
-    )
-    if mixup_cutmix is not None:
-
-        def collate_fn(batch):
-            return mixup_cutmix(*default_collate(batch))
-
-    else:
-        collate_fn = default_collate
-
-    if args.distributed:    
-        if hasattr(args, "ra_sampler") and args.ra_sampler:
-            train_sampler = RASampler(train_dst, shuffle=True, repetitions=args.ra_reps)
-        else:
-            train_sampler = torch.utils.data.distributed.DistributedSampler(train_dst)
-        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dst, shuffle=False)
-    else:
-        train_sampler = torch.utils.data.RandomSampler(train_dst)
-        val_sampler = torch.utils.data.SequentialSampler(val_dst)
-
-
-    train_loader = torch.utils.data.DataLoader(train_dst, batch_size=train_batch_size, sampler=train_sampler, shuffle=False, num_workers=num_workers, pin_memory=True, collate_fn=collate_fn)
-    val_loader = torch.utils.data.DataLoader(val_dst, batch_size=val_batch_size, sampler=val_sampler, shuffle=False, num_workers=num_workers, pin_memory=True)
-    
-    return train_loader, val_loader, train_sampler, val_sampler
-
-def prepare_imagenette(path="../Datasets/data/imagenette2-160"):
-    
-    print('Parsing Imagenette dataset...')
-
-    train_transforms = T.Compose([
-    T.RandomResizedCrop(224),
-    T.RandomHorizontalFlip(),
-    T.ToTensor(),
-    T.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225])
-    ])
-
-    val_transforms = T.Compose([
-        T.Resize(256),
-        T.CenterCrop(224),
-        T.ToTensor(),
-        T.Normalize(mean=[0.485, 0.456, 0.406],
-                            std=[0.229, 0.224, 0.225])
-    ])
-
-    train_dir = os.path.join(path, 'train')
-    val_dir = os.path.join(path, 'val')
-
-    train_dataset = ImageFolder(root=train_dir, transform=train_transforms)
-    val_dataset = ImageFolder(root=val_dir, transform=val_transforms)
-
-    if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False)
-
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
-    print(train_dataset.classes)
-
-    if args.distributed:
-        return train_loader, val_loader, train_sampler, val_sampler
-    else:
-        return train_loader, val_loader, None, None
-    
-    
-def get_cifar_dataloaders(dataset='cifar10', data_root='../Datasets/data', batch_size=128, num_workers=4, distributed=True):
-    """
-    Returns train and test loaders for CIFAR-10 or CIFAR-100 with ImageNet-compatible transforms.
-    """
-
-    # ImageNet mean and std
-    imagenet_mean = [0.485, 0.456, 0.406]
-    imagenet_std = [0.229, 0.224, 0.225]
-
-    # Transform for training and testing
-    transform_train = T.Compose([
-        T.Resize(224),
-        T.RandomHorizontalFlip(),         
-        T.ToTensor(),
-        T.Normalize(mean=imagenet_mean, std=imagenet_std),
-    ])
-
-    transform_test = T.Compose([
-        T.Resize(224),
-        T.ToTensor(),
-        T.Normalize(mean=imagenet_mean, std=imagenet_std),
-    ])
-
-
-    if dataset.lower() == 'cifar10':
-        train_dataset = datasets.CIFAR10(root=data_root, train=True, download=True, transform=transform_train)
-        test_dataset = datasets.CIFAR10(root=data_root, train=False, download=True, transform=transform_test)
-        num_classes = 10
-    elif dataset.lower() == 'cifar100':
-        train_dataset = datasets.CIFAR100(root=data_root, train=True, download=True, transform=transform_train)
-        test_dataset = datasets.CIFAR100(root=data_root, train=False, download=True, transform=transform_test)
-        num_classes = 100
-    else:
-        raise ValueError("Dataset must be either 'cifar10' or 'cifar100'.")
-
-    if distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
-        test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, shuffle=False)
-    else:
-        train_sampler = None
-        test_sampler = None
-
-    # ADD CUTMIX AND MIXUP AUGMENTATIONS
-    mixup_cutmix = get_mixup_cutmix(mixup_alpha=0.8, cutmix_alpha=1.0, num_classes=num_classes, use_v2=False)
-    if mixup_cutmix is not None:
-        def collate_fn(batch):
-            return mixup_cutmix(*default_collate(batch))
-    else:
-        collate_fn = default_collate
-
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=(train_sampler is None),
-                              sampler=train_sampler, num_workers=num_workers, pin_memory=True, collate_fn=collate_fn)
-    
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False,
-                             sampler=test_sampler, num_workers=num_workers, pin_memory=True)
-
-    return train_loader, test_loader, train_sampler, test_sampler, num_classes
-
-
-######################################################################## MAIN STARTS ###########################################################################
-
 def main(args):
 
     if args.distributed:
-            utils.init_distributed_mode(args)
+            train_utils.init_distributed_mode(args)
     print(args)
 
     device = torch.device(args.device)
 
     example_inputs = torch.randn(1,3,224,224).to(device)
 
+    # PRUNING CRITERION
     if args.pruning_type == 'random':
         imp = tp.importance.RandomImportance()
     elif args.pruning_type == 'taylor':
@@ -393,13 +211,17 @@ def main(args):
         imp = tp.importance.GroupHessianImportance()
     else: raise NotImplementedError
 
+    # DATALOADERS
     if args.dataset_name.startswith('imagenet'):
-        train_loader, val_loader, train_sampler, val_sampler = prepare_imagenet(args.data_path, train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size, debug=args.debug)
-        num_classes = 1000
-        # train_loader, val_loader, train_sampler, val_sampler = prepare_imagenette()
+        train_loader, val_loader, num_classes = load_imagenet(datapath=args.data_path, batch_size=args.train_batch_size, distributed=args.distributed, ra_sampler=args.ra_sampler, debug=args.debug)
+    if args.dataset_name.startswith('imagenette'):
+        train_loader, val_loader, train_sampler, val_sampler = load_imagenette()
     if args.dataset_name.startswith('cifar'):
-        train_loader, val_loader, train_sampler, val_sampler, num_classes = get_cifar_dataloaders(dataset=args.dataset_name, batch_size=args.train_batch_size, distributed=args.distributed)
-
+        train_loader, val_loader, train_sampler, val_sampler, num_classes = load_cifar(dataset=args.dataset_name, batch_size=args.train_batch_size, distributed=args.distributed)
+    else:
+        train_loader, val_loader, num_classes = load_dummy_data(batch_size=args.train_batch_size, distributed=args.distributed)
+    
+    
     # Load the model
     model = torchvision.models.get_model(args.model_name, weights=args.weights, num_classes=1000)
     if args.dataset_name.startswith('cifar'):
@@ -413,8 +235,10 @@ def main(args):
     for p in model.parameters():
         p.requires_grad_(True)
 
-    if False:
-        print_trainable_summary(model)
+    # Fine-Tuning classifier (IF REQUIRED, ONLY FOR IMAGENETTE)
+    if args.dataset_name == "imagenette" and args.rebuild:
+        print("Fine-tuning classifier on Imagenette...")
+        # print_trainable_summary(model)
         # for name, param in model.named_parameters():
         #     print(f"{name}: {'Trainable' if param.requires_grad else 'Frozen'} - {param.numel():,} params")
 
@@ -499,7 +323,8 @@ def main(args):
     non_pruned_weights_recorder = {}
 
     
-    # ====================ITERATIVE PRUNER================== #
+    ## ====================ITERATIVE PRUNING================== ##
+
     for i in range(args.pruning_steps):
         print(f"================PRUNING STAGE-{i+1}======================")
         for grp in pruner.step(interactive=True):
@@ -515,14 +340,6 @@ def main(args):
                 handler = dep.handler.__name__
 
                 if isinstance(layer, (nn.Linear, nn.BatchNorm2d, nn.Conv2d)):
-
-                    # if target_layer_name == "conv1":
-                    #     print(target_layer_name)
-                    #     print(source_layer_name)
-                    #     print(type(layer))
-                    #     print(handler)
-                    #     print(trigger)
-                    #     print(idxs)
 
                     if handler == "prune_out_channels":
                         for j in range(i):
@@ -570,67 +387,6 @@ def main(args):
     print("Iterative Pruning complete")
 
     del pruned_weights, non_pruned_weights
-
-    
-    ############################################################################################################
-    # ---------------------------------------------FOR DEBUGGING-----------------------------------------------#
-    
-    # merged_out = []
-    # merged_in = []
-    # sample = 'conv1'
-
-    # for i in range(args.pruning_steps):
-    #     print(f"================PRUNING STAGE-{i+1}======================")
-        # for key,value in pruned_index_out[args.pruning_steps-i-1].items():
-        #     print("Out/Dim 0 Indices")
-        #     print(key, value)
-        #     print("# Pruned Index:", len(value))
-        #     print("NON-PRUNED")
-        #     print(non_pruned_index_out[args.pruning_steps-i-1][key])
-        #     print("# Non-Pruned Index:", len(non_pruned_index_out[args.pruning_steps-i-1][key]))
-        #     print(set(value) & set(non_pruned_index_out[args.pruning_steps-i-1][key]))
-        # for key,value in pruned_index_in[args.pruning_steps-i-1].items():
-        #     print("In/Dim 1 Indices")
-        #     print(len(value))
-        #     print(key, value)
-        #     print("# Pruned Index:", len(value))
-        #     print("NON-PRUNED")
-        #     print(non_pruned_index_in[args.pruning_steps-i-1][key])
-        #     print("# Non-Pruned Index:", len(non_pruned_index_in[args.pruning_steps-i-1][key]))
-        #     print(set(value) & set(non_pruned_index_in[args.pruning_steps-i-1][key]))
-
-    #     print(pruned_index_out[args.pruning_steps-i-1].keys())
-    #     print(pruned_index_in[args.pruning_steps-i-1].keys())
-
-    #     if sample in pruned_index_out[args.pruning_steps-i-1]:
-    #         print("Pruned Out Indices")
-    #         print(pruned_index_out[args.pruning_steps-i-1][sample])
-    #         print("Number of Index Pruned:", len(pruned_index_out[args.pruning_steps-i-1][sample]))
-    #         merged_out = merged_out + pruned_index_out[args.pruning_steps-i-1][sample]
-    #     if sample in pruned_index_in[args.pruning_steps-i-1]:
-    #         print("Pruned In Indices")
-    #         print(pruned_index_in[args.pruning_steps-i-1][sample])
-    #         print("Number of Index Pruned:", len(pruned_index_in[args.pruning_steps-i-1][sample]))
-    #         merged_in = merged_in + pruned_index_in[args.pruning_steps-i-1][sample]
-    #     if sample in pruned_weights_recorder[f"Level_{i+2}"]:
-    #         print(pruned_weights_recorder[f"Level_{i+2}"][sample]["Weight"].shape)
-    #     if sample in non_pruned_weights_recorder[f"Level_{i+2}"]:
-    #         print(non_pruned_weights_recorder[f"Level_{i+2}"][sample]["Weight"].shape)
-
-
-    # # Check for duplicates
-    # unique_items = set(merged_out)
-    # duplicates = [item for item in unique_items if merged_out.count(item) > 1]
-    # if len(duplicates) > 0:
-    #     print("Found Duplicates in pruned out indices:", duplicates)
-
-    # unique_items = set(merged_in)
-    # duplicates = [item for item in unique_items if merged_in.count(item) > 1]
-    # if len(duplicates) > 0:
-    #     print("Found Duplicates in pruned in indices:", duplicates)
-
-    # exit()
-    ############################################################################################################
 
     model_info = get_model_info_core(non_pruned_weights=model.state_dict())
     print("Model Info:", model_info)

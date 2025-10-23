@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
-from ViT_iterative_adaptivity import create_vit_general 
-from prune_utils import get_vit_info
-from cnn_prune_utils import resnet_generator
+from main import create_vit_general 
+from utils.prune_utils import get_vit_info
+from utils.cnn_prune_utils import resnet_generator
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Running on device:", device)

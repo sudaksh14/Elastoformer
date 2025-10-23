@@ -12,7 +12,7 @@ import os
 import pickle
 import numpy as np
 from models.Resnet import *
-from partial_freezing import freeze_conv2d_params, freeze_conv2d_params_v2, freeze_bn_params
+from utils.partial_freezing import freeze_conv2d_params, freeze_conv2d_params_v2, freeze_bn_params
 from timm.models.layers import DropPath
 
 

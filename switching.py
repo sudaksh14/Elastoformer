@@ -1,10 +1,10 @@
 import torch
 import torch.nn as nn
 import time
-from ViT_iterative_adaptivity import create_vit_general
-from prune_utils import get_vit_info, merge_and_remap_indices
+from main import create_vit_general
+from utils.prune_utils import get_vit_info, merge_and_remap_indices
 from transformers.models.vit.modeling_vit_pruned import ViTForImageClassification
-from cnn_prune_utils import resnet_generator
+from utils.cnn_prune_utils import resnet_generator
 import torchvision
 import json
 import pickle

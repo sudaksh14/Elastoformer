@@ -1,17 +1,68 @@
 import torch 
 import torch.nn as nn 
-from layerwrapper import WrappedLayer 
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
 import re
 import matplotlib.pyplot as plt
 import numpy as np
-from partial_freezing import freeze_linear_params, freeze_conv2d_params, freeze_layernorm_params
+from models.elastoformer import *
+from utils.partial_freezing import freeze_linear_params, freeze_conv2d_params, freeze_layernorm_params
 from timm.models.layers import DropPath
 import os
 import io
 
+def create_vit_general(img_size=(224,224), patch_size=(16,16), in_channels=3, embed_dim=768, num_layers=12, num_heads=12, 
+                  qkv_dim=768, ff_hidden_dim=3072, output_dim=768, num_classes=1000, dim_dict=None):
+    """
+    Creates a Hugging Face Vision Transformer (ViT) model with customizable dimensions.
+
+    Args:
+        img_size (int): Image size (default: 224x224).
+        patch_size (int): Patch size for embedding.
+        in_channels (int): Number of image channels (default: 3).
+        embed_dim (int): Dimension of embedding layer.
+        num_layers (int): Number of transformer blocks.
+        num_heads (int): Number of attention heads.
+        qkv_dim (int): Dimension of Query, Key, and Value weights.
+        ff_hidden_dim (int): Hidden dimension in feed-forward layers.
+        output_dim (int): Output dimension of FFN.
+        num_classes (int): Number of output classes.
+
+    Returns:
+        ViTModel: A Hugging Face ViT model with custom configurations.
+    """
+
+    if dim_dict is not None:
+        embed_dim = dim_dict["Embed_Dim"]
+        num_layers = dim_dict["num_layers"]
+        num_heads = dim_dict['num_heads']
+        ff_hidden_dim = dim_dict["FFN_Intermediate_Dim"]
+        ff_output_dim = dim_dict["FFN_Output_Dim"]
+        qkv_dim = dim_dict["QKV_Dim_out"]
+
+
+    config = ElasticViTConfig(
+        image_size=img_size,
+        patch_size=patch_size,
+        num_channels=in_channels,
+        hidden_size=embed_dim,
+        num_hidden_layers=num_layers,
+        num_attention_heads=num_heads,
+        intermediate_size=ff_hidden_dim,
+        qkv_bias=True,  # Include biases for Q, K, V
+        hidden_dropout_prob=0.0,
+        attention_probs_dropout_prob=0.0,
+        num_labels=num_classes)
+
+    config.pruned_dim = qkv_dim
+    model = ElasticViTForImageClassification(config)
+    print(type(model))
+    print(type(model.vit))
+    print(type(model.vit.encoder))
+    print(type(model.vit.encoder.layer[0].attention))
+    print(type(model.vit.encoder.layer[0].attention.attention))
+    return model
 
 def find_layers(module, layers=[nn.Linear], name=''):
     if type(module) in layers:
@@ -1606,3 +1657,46 @@ def get_deit_info(pruned_weights=None, non_pruned_weights=None, num_heads=None, 
     deit_info["num_layers"] = max(int(key.split(".")[3]) for key in non_pruned_weights if key.startswith("deit.encoder.layer")) + 1
     deit_info["num_heads"] = get_num_heads(deit_info["QKV_Dim_out"])
     return deit_info
+
+
+def compare_performance(args):
+    device = torch.device(args.device)
+    criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+
+    path_core = f"/var/scratch/skalra/elastoformer_saves/state_dicts/Vit_b_16_Pruned_{args.pruning_ratio}_state_dict.pth"
+    path_rebuilt = f"/var/scratch/skalra/elastoformer_saves/state_dicts/Vit_b_16_Rebuilt_{args.pruning_ratio}_state_dict.pth"
+
+    prune_dict = torch.load(path_core, map_location=device)
+    rebuilt_dict = torch.load(path_rebuilt, map_location=device)
+
+    print(prune_dict.keys())
+    print(prune_dict['vit.encoder.layer.0.attention.attention.query.weight'].shape)
+    print(prune_dict['vit.encoder.layer.0.intermediate.dense.weight'].shape)
+
+    prune_embed = prune_dict['vit.encoder.layer.0.attention.attention.query.weight'].shape[0]
+    prune_ff = prune_dict['vit.encoder.layer.0.intermediate.dense.weight'].shape[0]
+
+    rebuilt_embed = rebuilt_dict['vit.encoder.layer.0.attention.attention.query.weight'].shape[0]
+    rebuilt_ff = rebuilt_dict['vit.encoder.layer.0.intermediate.dense.weight'].shape[0]
+
+    example_inputs = torch.randn(1,3,224,224).to(device)
+
+    _,val_loader,_,_ = load_imagenet(args.data_path, train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size)
+
+    original_model = ElasticViTForImageClassification.from_pretrained(args.model_name).to(device)
+    pruned_model = create_vit_general(embed_dim=prune_embed, output_dim=prune_embed, ff_hidden_dim=prune_ff).to(device)
+    rebuilt_model = create_vit_general(embed_dim=rebuilt_embed, output_dim=rebuilt_embed, ff_hidden_dim=rebuilt_ff).to(device)
+
+    pruned_model.load_state_dict(prune_dict)
+    rebuilt_model.load_state_dict(rebuilt_dict)
+
+    base_macs,_ = tp.utils.count_ops_and_params(original_model, example_inputs)
+    pruned_macs,_ = tp.utils.count_ops_and_params(pruned_model, example_inputs)
+    rebuilt_macs,_ = tp.utils.count_ops_and_params(rebuilt_model, example_inputs)
+
+    orig_acc = evaluate(original_model, criterion, val_loader, device=device)
+    pruned_acc = evaluate(pruned_model, criterion, val_loader, device=device)
+    rebuilt_acc = evaluate(rebuilt_model, criterion, val_loader, device=device)
+
+    plot_comparison_macs(args, accuracy=[orig_acc, pruned_acc, rebuilt_acc], macs=[base_macs, pruned_macs, rebuilt_macs], pruning_ratio=args.pruning_ratio)
+    print("Plotting Complete")
