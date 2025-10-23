@@ -18,9 +18,10 @@ Elastoformer streamlines the process of network compression and optimization:
 
 This capability allows you to generate a spectrum of models—from full-size to highly compressed—to match any target hardware precisely.
 
-![Elastoformer Scheme](./images/scheme.png)
-
-**Figure 1: The Elastoformer Scheme for Dynamic Model Adaptivity**
+<p align="center">
+  <img src="./images/scheme.png" alt="Elastoformer Scheme" width="500"/><br>
+  <b>Figure 1: The Elastoformer Scheme for Dynamic Model Adaptivity</b>
+</p>
 
 ## Environment Setup
 1. Clone the repository:
