@@ -1,7 +1,26 @@
-# Elastoformer
-Elastoformer enables dynamic adaptivity in deep neural networks via **elastic model transformation**. 
-It supports ViTs (like DeiT/Vit) and CNNs (ResNet, VGG) and allows **pruning, rebuilding, and deploying descendant networks** efficiently.
+# Elastoformer: Enabling Dynamic Adaptivity via Elastic Model Transformation 🚀
+
+**Elastoformer** is a cutting-edge framework that unlocks **dynamic adaptivity** in deep neural networks through **elastic model transformation**.
+
+In today's diverse deployment environments—from powerful cloud servers to resource-constrained edge devices—a single model size is often inefficient. Elastoformer solves this by treating a single, pre-trained network as an **"elastic" core** from which multiple, optimized descendants can be efficiently generated.
+
+This framework achieves superior efficiency by supporting both major architecture families: **Vision Transformers (ViTs)**, including models like **DeiT** and **ViT**, and **Convolutional Neural Networks (CNNs)**, such as **ResNet** and **VGG**.
+
+---
+
+## 💡 How It Works
+
+Elastoformer streamlines the process of network compression and optimization:
+
+* **Pruning:** Efficiently removes redundant weights and units from the core model.
+* **Rebuilding:** Creates smaller, **Descendant Networks (DNs)** tailored to specific resource constraints.
+* **Deploying:** Enables rapid deployment of these optimized DNs with minimal retraining effort, ensuring high accuracy is retained even after significant compression.
+
+This capability allows you to generate a spectrum of models—from full-size to highly compressed—to match any target hardware precisely.
+
 ![Elastoformer Scheme](./images/scheme.png)
+
+**Figure 1: The Elastoformer Scheme for Dynamic Model Adaptivity**
 
 ## Environment Setup
 1. Clone the repository:
