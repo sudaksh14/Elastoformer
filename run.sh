@@ -1,0 +1,17 @@
+python main.py \
+    --exp_name elastoformer \
+    --dataset_name imagenet \
+    --model_name facebook/deit-base-patch16-224 \
+    --pruning_type l1 \
+    --pruning_ratio 0.5 \
+    --iterative --pruning_steps 5 \
+    --data_path /path/to/dataset/\
+    --train_batch_size 512 \
+    --val_batch_size 512 \
+    --save_as /path/to/saves/ \
+    --test_accuracy \
+    --rebuild \
+    --epochs 50 --core_epochs 50 --lr-warmup-epochs 10 --lr 5e-5 \
+    --mixup-alpha 0.2 --core_weight_decay 0.05 --stochastic_depth \
+    --clip-grad-norm 1 --amp --ra-sampler \
+    --distributed --model-ema --log_wandb \
