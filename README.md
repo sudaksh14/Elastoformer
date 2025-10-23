@@ -1,7 +1,7 @@
 # Elastoformer
 Elastoformer enables dynamic adaptivity in deep neural networks via **elastic model transformation**. 
 It supports ViTs (like DeiT/Vit) and CNNs (ResNet, VGG) and allows **pruning, rebuilding, and deploying descendant networks** efficiently.
-![Elastoformer Scheme](./images/Elastoformer_Scheme.pdf)
+![Elastoformer Scheme](./images/scheme.png)
 
 ## Environment Setup
 1. Clone the repository:
