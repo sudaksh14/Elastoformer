@@ -29,13 +29,13 @@ This capability allows you to generate a spectrum of models—from full-size to 
 git clone https://github.com/yourusername/elastoformer.git
 cd elastoformer
 ```
-1. Install Dependencies:
+2. Install Dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
 ## Usage
-Here is the command for running the elastic transformation for DeiT:
+Here is the command for running the elastic transformation for DeiT [1]:
 ```
 python main.py \
     --exp_name elastoformer \
@@ -79,7 +79,7 @@ python elastic_cnn.py \
 ```
 where:
 - `--dataset_name`: [`imagenet`, `cifar10`, `cifar100`, `dummy`].
-- `--model_name`: `network architecture [DeiT: "facebook/deit-base-patch16-224", ViT: "google/vit-base-patch16-224", Resnet: "resnet50", VGG: "vgg16" etc..], (ViT models are named as per HuggingFace ModelHub https://huggingface.co/models)`
+- `--model_name`: `network architecture [DeiT: "facebook/deit-base-patch16-224", ViT: "google/vit-base-patch16-224", Resnet: "resnet50", VGG: "vgg16" etc..], (ViT models are named as per HuggingFace ModelHub [2])`
 - `--weights`: `Pre-trained weights identifier as per Torchvision (only applicable for CNNs/Torchvision models)` .
 - `--pruning_type`: [`l1`, `l2`, `taylor`, `hessian`].
 - `--pruning_ratio`: `Between (0,1) for the level of compression, 1 being max compression`.
@@ -88,5 +88,5 @@ where:
 - `--rebuild`: `Flag for retraining of DNs (always True)`.
 
 ## References
-- [DeiT Paper](https://arxiv.org/abs/2012.12877)
-- [HuggingFace ViT Models](https://huggingface.co/models)
+- [1. DeiT Paper](https://arxiv.org/abs/2012.12877)
+- [2. HuggingFace ViT Models](https://huggingface.co/models)
