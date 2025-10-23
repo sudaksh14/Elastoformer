@@ -1,7 +1,5 @@
 # ignore files
-
 *.onnx
-*.png
 *.pth
 *.ipynb
 run_job.sh
