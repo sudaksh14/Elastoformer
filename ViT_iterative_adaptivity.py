@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Set, Tuple, Union
 import torch
 import torch.nn.functional as F
 import torch_pruning as tp
-from models.elastoformer import ElasticViTConfig, ElasticViTSelfAttention, ElasticViTSelfOutput, ElasticViTForImageClassification
+from models.elastoformer import *
 import warnings
 from torchvision.datasets import ImageFolder
 import torchvision.datasets as datasets
@@ -15,7 +15,6 @@ from torch.utils.data import SubsetRandomSampler, Subset
 from tqdm import tqdm
 import imgaug_presets
 from copy import deepcopy
-# from models.hf_vit import create_vit_general
 from prune_utils import *
 from trainer import fine_tuner, evaluate, fine_tuner_core
 from sampler import RASampler
@@ -342,7 +341,7 @@ def create_vit_general(img_size=(224,224), patch_size=(16,16), in_channels=3, em
         qkv_dim = dim_dict["QKV_Dim_out"]
 
 
-    config = ViTConfig(
+    config = ElasticViTConfig(
         image_size=img_size,
         patch_size=patch_size,
         num_channels=in_channels,
@@ -357,6 +356,11 @@ def create_vit_general(img_size=(224,224), patch_size=(16,16), in_channels=3, em
 
     config.pruned_dim = qkv_dim
     model = ElasticViTForImageClassification(config)
+    print(type(model))
+    print(type(model.vit))
+    print(type(model.vit.encoder))
+    print(type(model.vit.encoder.layer[0].attention))
+    print(type(model.vit.encoder.layer[0].attention.attention))
     return model
 
 def compare_performance(args):
@@ -556,9 +560,17 @@ def main(args):
         model = ElasticViTForImageClassification.from_pretrained(args.model_name, pruned_dim=384)
     else:
         model = ElasticViTForImageClassification.from_pretrained(args.model_name)
+        # model = from_pretrained_elastic(args.model_name, config=ElasticViTConfig())
     if args.dataset_name.startswith('cifar'):
         model.classifier = nn.Linear(model.config.hidden_size, num_classes)
     model = model.to(device)
+    
+    print(type(model))
+    print(type(model.vit))
+    print(type(model.vit.encoder))
+    print(type(model.vit.encoder.layer[0].attention))
+    print(type(model.vit.encoder.layer[0].attention.attention))
+
 
     # Fine-Tune the Orignal Model (IF REQUIRED, ONLY FOR IMAGENETTE)
     if False:
@@ -852,7 +864,7 @@ def main(args):
 
     # Fine-Tune the Core model
     print("================FINE-TUNING CORE MODEL/DESCENDANT MODEL LEVEL-1======================")
-    fine_tuner_core(args, device, model, train_loader, val_loader)
+    # fine_tuner_core(args, device, model, train_loader, val_loader)
 
     """
     NOTE: Update the Core model weights after fine-tuning : 
@@ -899,7 +911,7 @@ def main(args):
 
             rebuilding_weights = non_pruned_weights_recorder[f"Level_{i+2}"]
             pruned_weights = pruned_weights_recorder[f"Level_{i+2}"]
-            rebuild_dim = get_vit_info(pruned_weights, rebuilding_weights, num_heads=6)
+            rebuild_dim = get_vit_info(pruned_weights, rebuilding_weights, num_heads=(6 if "small" in args.model_name else None))
             print("Model Info:", rebuild_dim)
             rebuilt_model = create_vit_general(dim_dict=rebuild_dim, num_classes=num_classes).to(device)
             rebuilt_model,_,non_pruned_index_mapped = update_vit_weights_global(rebuilt_model, [pruned_index_in[args.pruning_steps-i-1], pruned_index_out[args.pruning_steps-i-1]], 
@@ -924,7 +936,7 @@ def main(args):
 
             if args.stochastic_depth:
                 inject_stochastic_depth(rebuilt_model)
-            fine_tuner(args, device, rebuilt_model, train_loader, val_loader, rebuild=True, in_freeze_indices=non_pruned_index_mapped[0], out_freeze_indices=non_pruned_index_mapped[1])
+            # fine_tuner(args, device, rebuilt_model, train_loader, val_loader, rebuild=True, in_freeze_indices=non_pruned_index_mapped[0], out_freeze_indices=non_pruned_index_mapped[1])
 
             if i < args.pruning_steps - 1:
                 updated_weights = extract_vit_core_weights(rebuilt_model)
@@ -977,26 +989,26 @@ def main(args):
             del pruned_weights, rebuilding_weights, rebuilt_model
             torch.cuda.empty_cache()
 
-            plot_comparison_macs(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], macs=[base_macs, pruned_macs, *macs_recorder], x_labels=(["Original"] + [f"Level-{j+1}" for j in range(i+2)]))
-            plot_comparison_params(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], params=[base_params, pruned_params, *param_recorder], x_labels=(["Original"] + [f"Level-{j+1}" for j in range(i+2)]))
-            plot_comparison_size(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], size=[base_size, pruned_size, *size_recorder], x_labels=(["Original"] + [f"Level-{j+1}" for j in range(i+2)]))
-            print("Test Accuracy:", [acc_ori, acc_pruned, *acc_recorder])
-            print("MAC's:", [base_macs, pruned_macs, *macs_recorder])
-            print("Params:", [base_params, pruned_params, *param_recorder])
-            print("Size:", [base_size, pruned_size, *size_recorder])
-            print("Plotting Complete")
+        #     plot_comparison_macs(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], macs=[base_macs, pruned_macs, *macs_recorder], x_labels=(["Original"] + [f"Level-{j+1}" for j in range(i+2)]))
+        #     plot_comparison_params(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], params=[base_params, pruned_params, *param_recorder], x_labels=(["Original"] + [f"Level-{j+1}" for j in range(i+2)]))
+        #     plot_comparison_size(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], size=[base_size, pruned_size, *size_recorder], x_labels=(["Original"] + [f"Level-{j+1}" for j in range(i+2)]))
+        #     print("Test Accuracy:", [acc_ori, acc_pruned, *acc_recorder])
+        #     print("MAC's:", [base_macs, pruned_macs, *macs_recorder])
+        #     print("Params:", [base_params, pruned_params, *param_recorder])
+        #     print("Size:", [base_size, pruned_size, *size_recorder])
+        #     print("Plotting Complete")
 
 
         
         
-        plot_comparison_macs(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], macs=[base_macs, pruned_macs, *macs_recorder], x_labels=(["Original"] + [f"Level-{i}" for i in range(1, args.pruning_steps+2)]))
-        plot_comparison_params(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], params=[base_params, pruned_params, *param_recorder], x_labels=(["Original"] + [f"Level-{i}" for i in range(1, args.pruning_steps+2)]))
-        plot_comparison_size(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], size=[base_size, pruned_size, *size_recorder], x_labels=(["Original"] + [f"Level-{i}" for i in range(1, args.pruning_steps+2)]))
-        print("Test Accuracy:", [acc_ori, acc_pruned, *acc_recorder])
-        print("MAC's:", [base_macs, pruned_macs, *macs_recorder])
-        print("Params:", [base_params, pruned_params, *param_recorder])
-        print("Size:", [base_size, pruned_size, *size_recorder])
-        print("Rebuilding Complete")
+        # plot_comparison_macs(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], macs=[base_macs, pruned_macs, *macs_recorder], x_labels=(["Original"] + [f"Level-{i}" for i in range(1, args.pruning_steps+2)]))
+        # plot_comparison_params(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], params=[base_params, pruned_params, *param_recorder], x_labels=(["Original"] + [f"Level-{i}" for i in range(1, args.pruning_steps+2)]))
+        # plot_comparison_size(args, accuracy=[acc_ori, acc_pruned, *acc_recorder], size=[base_size, pruned_size, *size_recorder], x_labels=(["Original"] + [f"Level-{i}" for i in range(1, args.pruning_steps+2)]))
+        # print("Test Accuracy:", [acc_ori, acc_pruned, *acc_recorder])
+        # print("MAC's:", [base_macs, pruned_macs, *macs_recorder])
+        # print("Params:", [base_params, pruned_params, *param_recorder])
+        # print("Size:", [base_size, pruned_size, *size_recorder])
+        # print("Rebuilding Complete")
     
 
 

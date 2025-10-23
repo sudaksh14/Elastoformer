@@ -13,131 +13,126 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Elastoformer ViT model built on repo: https://github.com/huggingface/transformers/tree/main/src/transformers/models/vit"""
+"""Elastoformer model is built on Huggingface ViT: https://github.com/huggingface/transformers/tree/main/src/transformers/models/vit"""
 
 from transformers.models.vit.modeling_vit import (
     ViTPreTrainedModel,
     ViTModel,
     ViTEncoder,
-    ViTLayer,
-    ViTAttention,
-    ViTSelfAttention,
-    ViTSelfOutput,
+    ViTIntermediate,
+    ViTOutput,
     ViTConfig,
     ViTForImageClassification,
+    ViTEmbeddings,
+    ViTPooler,
 )
+from transformers.modeling_outputs import ImageClassifierOutput
 import torch
 from torch import nn
 from typing import Dict, List, Optional, Set, Tuple, Union
 import math
 
-
+# -----------------------------
+# Elastic Config
+# -----------------------------
 class ElasticViTConfig(ViTConfig):
     def __init__(self, *args, pruned_dim=768, **kwargs):
         super().__init__(*args, **kwargs)
         self.pruned_dim = pruned_dim
 
 
-class ElasticViTSelfAttention(ViTSelfAttention):
-    def __init__(self, config: ElasticViTConfig) -> None:
-        super().__init__(config)
-        if config.pruned_dim % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
-            raise ValueError(
-                f"The hidden size {config.hidden_size,} is not a multiple of the number of attention "
-                f"heads {config.num_attention_heads}."
-            )
-        
+# -----------------------------
+# Elastic Self-Attention
+# -----------------------------
+class ElasticViTSelfAttention(nn.Module):
+    def __init__(self, config: ElasticViTConfig):
+        super().__init__()
         self.num_attention_heads = config.num_attention_heads
         self.attention_head_size = config.pruned_dim // config.num_attention_heads
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        self.query = nn.Linear(config.hidden_size, self.all_head_size, bias=config.qkv_bias)
-        self.key = nn.Linear(config.hidden_size, self.all_head_size, bias=config.qkv_bias)
-        self.value = nn.Linear(config.hidden_size, self.all_head_size, bias=config.qkv_bias)
-
+        self.query = nn.Linear(config.hidden_size, self.all_head_size)
+        self.key = nn.Linear(config.hidden_size, self.all_head_size)
+        self.value = nn.Linear(config.hidden_size, self.all_head_size)
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
 
-    def transpose_for_scores(self, x: torch.Tensor, num_heads: int, head_dim: int) -> torch.Tensor:
-        # x shape: (batch, seq_len, all_head_size)
-        new_shape = x.size()[:-1] + (num_heads, head_dim)  # (B, T, h, d)
-        x = x.view(new_shape)
-        return x.permute(0, 2, 1, 3)  # (B, h, T, d)
+    def transpose_for_scores(self, x):
+        new_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
+        return x.view(new_shape).permute(0, 2, 1, 3)
 
     def forward(
-        self, hidden_states, head_mask: Optional[torch.Tensor] = None, output_attentions: bool = False
+        self,
+        hidden_states,
+        head_mask: Optional[torch.Tensor] = None,
+        output_attentions: bool = False
     ) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor]]:
-        
-        # Compute Q, K, V
-        query_layer = self.query(hidden_states)
-        key_layer = self.key(hidden_states)
-        value_layer = self.value(hidden_states)
+        q = self.transpose_for_scores(self.query(hidden_states))
+        k = self.transpose_for_scores(self.key(hidden_states))
+        v = self.transpose_for_scores(self.value(hidden_states))
 
-        # Transpose to shape (batch, heads, seq_len, head_dim)
-        query_layer = self.transpose_for_scores(query_layer, self.num_attention_heads, self.attention_head_size)
-        key_layer = self.transpose_for_scores(key_layer, self.num_attention_heads, self.attention_head_size)
-        value_layer = self.transpose_for_scores(value_layer, self.num_attention_heads, self.attention_head_size)
-
-        # Attention scores
-        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
-        attention_scores = attention_scores / math.sqrt(self.attention_head_size)
+        attention_scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(self.attention_head_size)
         attention_probs = nn.functional.softmax(attention_scores, dim=-1)
         attention_probs = self.dropout(attention_probs)
 
-        # Mask heads if needed
         if head_mask is not None:
             attention_probs = attention_probs * head_mask
 
-        # Compute context
-        context_layer = torch.matmul(attention_probs, value_layer)  # (B, h, T, d)
-        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()  # (B, T, h, d)
-        new_shape = context_layer.size()[:-2] + (self.all_head_size,)  # (B, T, h*d)
-        context_layer = context_layer.view(new_shape)
+        context = torch.matmul(attention_probs, v)
+        context = context.permute(0, 2, 1, 3).contiguous()
+        context = context.view(context.size()[:-2] + (self.all_head_size,))
 
-        outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
+        outputs = (context, attention_probs) if output_attentions else (context,)
         return outputs
-    
-    
-class ElasticViTSelfOutput(ViTSelfOutput):
-    """
-    The residual connection is defined in ViTLayer instead of here (as is the case with other models), due to the
-    layernorm applied before each block.
-    """
 
-    def __init__(self, config: ElasticViTConfig) -> None:
-        super().__init__(config)
+# -----------------------------
+# Elastic Self-Output
+# -----------------------------
+class ElasticViTSelfOutput(nn.Module):
+    def __init__(self, config: ElasticViTConfig):
+        super().__init__()
         self.dense = nn.Linear(config.pruned_dim, config.hidden_size)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-
         return hidden_states
-    
-class ElasticViTAttention(ViTAttention):
-    def __init__(self, config: ElasticViTConfig) -> None:
-        super().__init__(config)
+
+# -----------------------------
+# Elastic Attention Block
+# -----------------------------
+class ElasticViTAttention(nn.Module):
+    def __init__(self, config: ElasticViTConfig):
+        super().__init__()
         self.attention = ElasticViTSelfAttention(config)
-        self.output = ViTSelfOutput(config)
-        self.pruned_heads = set()
+        self.output = ElasticViTSelfOutput(config)
 
-    def prune_heads(self, heads: Set[int]) -> None:
-        if len(heads) == 0:
-            return
-        heads, index = find_pruneable_heads_and_indices(
-            heads, self.attention.num_attention_heads, self.attention.attention_head_size, self.pruned_heads
-        )
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        head_mask: Optional[torch.Tensor] = None,
+        output_attentions: bool = False
+    ) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor]]:
+        self_outputs = self.attention(hidden_states, head_mask=head_mask, output_attentions=output_attentions)
+        attention_output = self.output(self_outputs[0], hidden_states)
+        outputs = (attention_output,) + self_outputs[1:]
+        return outputs
 
-        # Prune linear layers
-        self.attention.query = prune_linear_layer(self.attention.query, index)
-        self.attention.key = prune_linear_layer(self.attention.key, index)
-        self.attention.value = prune_linear_layer(self.attention.value, index)
-        self.output.dense = prune_linear_layer(self.output.dense, index, dim=1)
-
-        # Update hyper params and store pruned heads
-        self.attention.num_attention_heads = self.attention.num_attention_heads - len(heads)
-        self.attention.all_head_size = self.attention.attention_head_size * self.attention.num_attention_heads
-        self.pruned_heads = self.pruned_heads.union(heads)
+# -----------------------------
+# Elastic ViT Layer
+# -----------------------------
+class ElasticViTLayer(nn.Module):
+    """Elastic version of ViTLayer using pruned dimensions for attention."""
+    
+    def __init__(self, config: ElasticViTConfig) -> None:
+        super().__init__()
+        self.chunk_size_feed_forward = config.chunk_size_feed_forward
+        self.seq_len_dim = 1
+        self.attention = ElasticViTAttention(config)
+        self.intermediate = ViTIntermediate(config)
+        self.output = ViTOutput(config)
+        self.layernorm_before = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.layernorm_after = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
 
     def forward(
         self,
@@ -145,94 +140,142 @@ class ElasticViTAttention(ViTAttention):
         head_mask: Optional[torch.Tensor] = None,
         output_attentions: bool = False,
     ) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor]]:
-        self_outputs = self.attention(hidden_states, head_mask, output_attentions)
+        self_attention_outputs = self.attention(
+            self.layernorm_before(hidden_states),  # in ViT, layernorm is applied before self-attention
+            head_mask,
+            output_attentions=output_attentions,
+        )
+        attention_output = self_attention_outputs[0]
+        outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
 
-        attention_output = self.output(self_outputs[0], hidden_states)
+        # first residual connection
+        hidden_states = attention_output + hidden_states
 
-        outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
+        # in ViT, layernorm is also applied after self-attention
+        layer_output = self.layernorm_after(hidden_states)
+        layer_output = self.intermediate(layer_output)
+
+        # second residual connection is done here
+        layer_output = self.output(layer_output, hidden_states)
+
+        outputs = (layer_output,) + outputs
+
         return outputs
 
 # ----------------------------
 # Custom Encoder using Elastic Attention
 # ----------------------------
-class ElasticViTLayer(ViTLayer):
-    """
-    Inherits ViTLayer but replaces ViTAttention with ElasticViTAttention
-    """
-    def __init__(self, config: ElasticViTConfig):
-        super().__init__(config)
-        # Replace the attention module with Elastic
-        self.attention = ElasticViTAttention(config)
-
 class ElasticViTEncoder(ViTEncoder):
     """
-    Inherits ViTEncoder but uses ElasticViTLayer
+    Elastic encoder that skips ViTEncoder's init check
+    but keeps all inherited behavior.
     """
     def __init__(self, config: ElasticViTConfig):
-        super().__init__(config)
-        self.layer = nn.ModuleList([ElasticViTLayer(config) for _ in range(config.num_hidden_layers)])
+        # skip ViTEncoder init to avoid hidden_size % num_heads check
+        nn.Module.__init__(self)
+        self.config = config
+        self.layer = nn.ModuleList(
+            [ElasticViTLayer(config) for _ in range(config.num_hidden_layers)]
+        )
+        self.gradient_checkpointing = False
 
 # ----------------------------
 # Custom ViT Model
 # ----------------------------
 class ElasticViTModel(ViTModel):
+    """
+    Elastic ViT backbone — replaces encoder with ElasticViTEncoder
+    """
     def __init__(self, config: ElasticViTConfig, add_pooling_layer: bool = True, use_mask_token: bool = False):
-        super().__init__(config, add_pooling_layer=add_pooling_layer, use_mask_token=use_mask_token)
-        # Replace encoder with elastic encoder
+        # do NOT call ViTModel.__init__ to bypass checks
+        nn.Module.__init__(self)
+        self.config = config
+
+        # Patch embedding and encoder
+        self.embeddings = ViTEmbeddings(config, use_mask_token=use_mask_token)
         self.encoder = ElasticViTEncoder(config)
+
+        self.layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps) if getattr(config, "use_final_layernorm", True) else None
+        self.pooler = ViTPooler(config) if add_pooling_layer else None
+
+        # Initialize weights and apply final processing
+        self.post_init()
 
 # ----------------------------
 # Custom ViTForImageClassification
 # ----------------------------
 class ElasticViTForImageClassification(ViTForImageClassification):
+    """
+    Classification head for Elastic ViT — uses ElasticViTModel backbone.
+    """
     def __init__(self, config: ElasticViTConfig):
-        super().__init__(config)
-        # Replace the base vit model with our elastic variant
+        # skip ViTForImageClassification init to avoid internal checks
+        nn.Module.__init__(self)
+        self.num_labels = config.num_labels
+        self.config = config
+
+        # Elastic backbone
         self.vit = ElasticViTModel(config, add_pooling_layer=False)
 
+        # Classification head (same as HF)
+        self.classifier = nn.Linear(config.hidden_size, config.num_labels) if config.num_labels > 0 else nn.Identity()
 
-def from_pretrained_elastic(
-    pretrained_model_name_or_path: str,
-    elastic_config: ElasticViTConfig,
-    map_location: str = None,
-    strict: bool = True,
-    **kwargs
-) -> ElasticViTForImageClassification:
-    """
-    Loads a HF ViT checkpoint into the ElasticViTForImageClassification model.
+        # Initialize weights
+        self.post_init()
 
-    Args:
-        pretrained_model_name_or_path (str): HF model identifier or local checkpoint.
-        elastic_config (ElasticViTConfig): Your custom elastic configuration.
-        map_location (str, optional): Device mapping for torch.load.
-        strict (bool, optional): Whether to strictly enforce key matching when loading state_dict.
-        kwargs: Additional kwargs passed to HF `from_pretrained`.
+    def forward(
+        self,
+        pixel_values: torch.Tensor,
+        head_mask: Optional[torch.Tensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        interpolate_pos_encoding: bool = False,
+        return_dict: Optional[bool] = None,
+        **kwargs,
+    ) -> Union[Tuple, ImageClassifierOutput]:
+        """
+        Forward pass for ElasticViTForImageClassification.
+        Mirrors Hugging Face ViTForImageClassification.forward(), 
+        but calls ElasticViTModel.
+        """
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-    Returns:
-        ElasticViTForImageClassification: The model with HF weights loaded.
-    """
+        outputs = self.vit(
+            pixel_values,
+            head_mask=head_mask,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            interpolate_pos_encoding=interpolate_pos_encoding,
+            return_dict=return_dict,
+        )
 
-    # Initialize your elastic model
+        # Get [CLS] token representation
+        pooled_output = outputs[0][:, 0]  # shape: (batch_size, hidden_size)
+        # pooled_output = self.layernorm(pooled_output)
+        logits = self.classifier(pooled_output)
+
+        if not return_dict:
+            output = (logits,) + outputs[1:]
+            return output
+
+        return ImageClassifierOutput(
+            loss=None,  # you can add loss calculation if needed
+            logits=logits,
+            hidden_states=outputs.hidden_states if hasattr(outputs, "hidden_states") else None,
+            attentions=outputs.attentions if hasattr(outputs, "attentions") else None,
+        )
+
+
+
+def from_pretrained_elastic(pretrained_model_name_or_path, elastic_config, **kwargs):
     model = ElasticViTForImageClassification(elastic_config)
-
-    # Load HF state dict
     hf_model = ViTForImageClassification.from_pretrained(pretrained_model_name_or_path, **kwargs)
+
+    # Copy compatible weights
     hf_state_dict = hf_model.state_dict()
-
-    # Remove any incompatible keys or adjust shapes if needed
-    elastic_state_dict = model.state_dict()
-    mapped_state_dict = {}
-    for k, v in hf_state_dict.items():
-        if k in elastic_state_dict and v.shape == elastic_state_dict[k].shape:
-            mapped_state_dict[k] = v
-        else:
-            print(f"[Elastic Loader] Skipping incompatible key: {k}, HF shape: {v.shape}, Elastic shape: {elastic_state_dict.get(k).shape if k in elastic_state_dict else 'N/A'}")
-
-    # Load state dict into elastic model
-    model.load_state_dict(mapped_state_dict, strict=strict)
-
-    if map_location:
-        model = model.to(map_location)
+    model_state_dict = model.state_dict()
+    matched_weights = {k: v for k, v in hf_state_dict.items() if k in model_state_dict and v.shape == model_state_dict[k].shape}
+    model.load_state_dict(matched_weights, strict=False)
 
     print(f"[Elastic Loader] Loaded pretrained weights from {pretrained_model_name_or_path}")
     return model
