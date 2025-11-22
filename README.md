@@ -2,7 +2,7 @@
 
 **Elastoformer** is a cutting-edge framework that unlocks **dynamic adaptivity** in deep neural networks through **elastic model transformation**.
 
-In today's diverse deployment environments—from powerful cloud servers to resource-constrained edge devices—a single model size is often inefficient. Elastoformer solves this by treating a single, pre-trained network as an **"elastic" core** from which multiple, optimized descendants can be efficiently generated.
+In today's diverse deployment environments, from powerful cloud servers to resource-constrained edge devices, a single model size is often inefficient. Elastoformer solves this by treating a single, pre-trained network as an **"Elastic" Model** from which multiple, optimized descendants can be efficiently generated.
 
 This framework achieves superior efficiency by supporting both major architecture families: **Vision Transformers (ViTs)**, including models like **DeiT** and **ViT**, and **Convolutional Neural Networks (CNNs)**, such as **ResNet** and **VGG**.
 
@@ -16,11 +16,9 @@ Elastoformer streamlines the process of network compression and optimization:
 * **Rebuilding:** Creates smaller, **Descendant Networks (DNs)** tailored to specific resource constraints.
 * **Deploying:** Enables rapid deployment of these optimized DNs with minimal retraining effort, ensuring high accuracy is retained even after significant compression.
 
-This capability allows you to generate a spectrum of models—from full-size to highly compressed—to match any target hardware precisely.
+This capability allows you to generate a spectrum of models: from full-size to highly compressed, to match any target hardware precisely.
 
 ![Elastoformer Scheme](./images/scheme.png)
-
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;**Figure 1: The Elastoformer Scheme for Dynamic Model Adaptivity**
 
 
 ## Environment Setup
@@ -86,6 +84,15 @@ where:
 - `--iterative`: `Flag for multiple step of elasticity (always True)`.
 - `--pruning_steps`: `Desired number of Descendant Networks (DNs), Note: # DN's = pruning_steps + 1`.
 - `--rebuild`: `Flag for retraining of DNs (always True)`.
+
+## Results
+- Accuracy vs FLOPs on Imagenet:
+![Acc](./images/accuracy_plot.png)
+
+- Latency vs FLOPs on Jetson:
+![Latency](./images/latency_orin.png)
+![Latency](./images/latency_nano.png)
+![Resnet_Latency](./images/Resnet_latency_nano.png)
 
 ## References
 - [1. DeiT Paper](https://arxiv.org/abs/2012.12877)
