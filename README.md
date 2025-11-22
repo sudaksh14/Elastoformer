@@ -4,7 +4,7 @@
 
 In today's diverse deployment environments, from powerful cloud servers to resource-constrained edge devices, a static Neural architecture is often inefficient. Especially in case of EdgeAI deployments which face highly dynamic operational conditions, with fluctuating constraints on latency, power availability, and memory resources, Deep Neural Networks (DNN), which a follow fixed computational execution flows, lack the flexibility to adapt to such variability, resulting in inefficient and suboptimal performance in edge scenarios. This underscores the need for architectures that are not only efficient but also dynamically scalable at runtime. Elastoformer solves this by treating a single, pre-trained network as an **"Elastic" Model** from which multiple, optimized descendants can be efficiently generated.
 
-This framework achieves superior efficiency by supporting both major architecture families: **Vision Transformers (ViTs)**, including models like **DeiT** and **ViT**, and **Convolutional Neural Networks (CNNs)**, such as **ResNet** and **VGG**.
+This framework achieves superior efficiency by supporting all major architectures: **Vision Transformers (ViTs)**, including models like **DeiT** and **ViT**, and **Convolutional Neural Networks (CNNs)**, such as **ResNet** and **VGG**.
 
 ---
 
