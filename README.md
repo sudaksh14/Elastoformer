@@ -2,7 +2,7 @@
 
 **Elastoformer** is a cutting-edge framework that unlocks **dynamic adaptivity** in deep neural networks through **elastic model transformation**.
 
-In today's diverse deployment environments, from powerful cloud servers to resource-constrained edge devices, a single model size is often inefficient. Elastoformer solves this by treating a single, pre-trained network as an **"Elastic" Model** from which multiple, optimized descendants can be efficiently generated.
+In today's diverse deployment environments, from powerful cloud servers to resource-constrained edge devices, a static Neural architecture is often inefficient. Especially in case of EdgeAI deployments which face highly dynamic operational conditions, with fluctuating constraints on latency, power availability, and memory resources, Deep Neural Networks (DNN), which a follow fixed computational execution flows, lack the flexibility to adapt to such variability, resulting in inefficient and suboptimal performance in edge scenarios. This underscores the need for architectures that are not only efficient but also dynamically scalable at runtime. Elastoformer solves this by treating a single, pre-trained network as an **"Elastic" Model** from which multiple, optimized descendants can be efficiently generated.
 
 This framework achieves superior efficiency by supporting both major architecture families: **Vision Transformers (ViTs)**, including models like **DeiT** and **ViT**, and **Convolutional Neural Networks (CNNs)**, such as **ResNet** and **VGG**.
 
@@ -86,13 +86,19 @@ where:
 - `--rebuild`: `Flag for retraining of DNs (always True)`.
 
 ## Results
-- Accuracy vs FLOPs on Imagenet:
-![Acc](./images/accuracy_plot.png)
 
-- Latency vs FLOPs on Jetson:
-![Latency](./images/latency_orin.png)
-![Latency](./images/latency_nano.png)
-![Resnet_Latency](./images/Resnet_latency_nano.png)
+### Accuracy vs FLOPs on Imagenet
+<img src="./images/accuracy_plot.png" width="350">
+
+### Latency vs FLOPs on Jetson Orin
+<img src="./images/latency_orin.png" width="350">
+
+### Latency vs FLOPs on Jetson Nano
+<img src="./images/latency_nano.png" width="350">
+
+### Latency vs FLOPs (Resnet-50) on Jetson Nano
+<img src="./images/Resnet_latency_nano.png" width="350">
+
 
 ## References
 - [1. DeiT Paper](https://arxiv.org/abs/2012.12877)
