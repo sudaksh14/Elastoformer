@@ -89,9 +89,12 @@ where:
 
 | Accuracy vs FLOPs | Latency vs FLOPs (Orin) |
 |-------------------|--------------------------|
-| <p align="center"><img src="./images/accuracy_plot.png" width="300"></p> | <p align="center"><img src="./images/latency_orin.png" width="300"></p> |
+| <img src="./images/accuracy_plot.png" width="300"> | <img src="./images/latency_orin.png" width="300"> |
+
 | Latency vs FLOPs (Nano) | ResNet-50 Latency (Nano) |
-| <p align="center"><img src="./images/latency_nano.png" width="300"></p> | <p align="center"><img src="./images/Resnet_latency_nano.png" width="300"></p> |
+|--------------------------|---------------------------|
+| <img src="./images/latency_nano.png" width="300"> | <img src="./images/Resnet_latency_nano.png" width="300"> |
+
 
 
 ## References
