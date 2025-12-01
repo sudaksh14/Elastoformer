@@ -1,0 +1,13 @@
+# ignore files
+*.onnx
+*.pth
+*.ipynb
+run_job.sh
+run_single.sh
+
+# ignore directories
+__pycache__/
+saves/
+outputs/
+jobs/
+wandb/

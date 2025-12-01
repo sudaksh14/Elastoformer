@@ -1,0 +1,161 @@
+#!/bin/bash
+#SBATCH --job-name=simple
+#SBATCH -t 165:00:00
+#SBATCH --partition=all           # Change based on cluster
+#SBATCH --nodes=1                 # Number of nodes
+#SBATCH --ntasks-per-node=1       # One task per node
+#SBATCH --gres=gpu:1              # GPUs per node (adjust if needed)
+#SBATCH --mem=64G                # Memory per node
+#SBATCH --cpus-per-task=12        # CPU cores per task
+#SBATCH --constraint="3090|A5000|titan_rtx"         # Request Specific GPUs (modify if needed)
+#SBATCH --output=./outputs/slurm_output_%A.out
+#SBATCH --exclude=ivi-cn005,ivi-cn009,ivi-cn010,ivi-cn011,ivi-cn012,ivi-cn001,ivi-cn002
+#SBATCH --export=ALL,WANDB_API_KEY=dfcd2574507b9ebe69ca13ab6f6925d864e82ee0
+
+echo "ViT Iterative Adaptivity on Imagenet-1k Dataset"
+echo | date
+echo "Node name: $(hostname)"
+echo -n memory=; ulimit -m
+echo -n nproc=; nproc
+
+# Initialize Conda and activate environment
+eval "$(conda shell.bash hook)"
+conda activate prune_llm
+
+# Distributed Training Setup (if using DDP)
+export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
+export MASTER_PORT=$((15000 + RANDOM % 5000))  # Use random port
+export WORLD_SIZE=$SLURM_NTASKS
+export RANK=$SLURM_PROCID
+export LOCAL_RANK=$SLURM_LOCALID
+
+
+nvidia-smi
+
+
+srun python ViT_iterative_adaptivity.py \
+    --exp_name deit_small_imagenet \
+    --dataset_name imagenet \
+    --model_name facebook/deit-small-patch16-224 \
+    --pruning_type l1 \
+    --pruning_ratio 0.5 \
+    --iterative --pruning_steps 5 \
+    --taylor_batchs 10 \
+    --data_path /ssdstore/ImageNet/ \
+    --train_batch_size 256 \
+    --val_batch_size 256 \
+    --save_as saves/state_dicts/ \
+    --test_accuracy \
+    --rebuild \
+    --epochs 50 --core_epochs 50 --lr-warmup-epochs 0 --lr 3e-4 \
+    --mixup-alpha 0.8 --core_weight_decay 0.02 --stochastic_depth \
+    --clip-grad-norm 1 --amp --ra-sampler \
+    --distributed --model-ema --log_wandb \
+
+
+# srun python ViT_iterative_adaptivity.py \
+#     --exp_name deit_Iter_Adaptivity_cifar100 \
+#     --dataset_name cifar100 \
+#     --model_name facebook/deit-base-patch16-224 \
+#     --pruning_type l1 \
+#     --pruning_ratio 0.5 \
+#     --iterative --pruning_steps 5 \
+#     --taylor_batchs 10 \
+#     --data_path /ssdstore/ImageNet/ \
+#     --train_batch_size 128 \
+#     --val_batch_size 128 \
+#     --save_as saves/state_dicts/ \
+#     --test_accuracy \
+#     --rebuild \
+#     --epochs 50 --core_epochs 50 --lr-warmup-epochs 5 --lr 5e-4 \
+#     --mixup-alpha 0.8 --core_weight_decay 0.05 --stochastic_depth \
+#     --clip-grad-norm 1 --amp --ra-sampler \
+#     --distributed --model-ema --log_wandb \
+
+
+# srun python cnn_iterative_adaptivity.py \
+#     --exp_name Resnet50_Iter_Adaptivity_noSD \
+#     --dataset_name imagenet \
+#     --model_name resnet50 \
+#     --weights ResNet50_Weights.IMAGENET1K_V2 \
+#     --pruning_type l1 \
+#     --pruning_ratio 0.5 \
+#     --iterative --pruning_steps 5 \
+#     --taylor_batchs 10 \
+#     --data_path /ssdstore/ImageNet/ \
+#     --train_batch_size 128 \
+#     --val_batch_size 128 \
+#     --save_as saves/state_dicts/ \
+#     --test_accuracy \
+#     --rebuild \
+#     --epochs 20 --core_epochs 20 --lr-warmup-epochs 5 --lr 1e-3 \
+#     --mixup-alpha 0.8 --core_weight_decay 0.05 \
+#     --clip-grad-norm 1 --amp --ra-sampler \
+#     --distributed --model-ema --log_wandb \
+
+# srun python cnn_iterative_adaptivity.py \
+#     --exp_name VGG_Iter_Adaptivity_cifar100 \
+#     --dataset_name cifar100 \
+#     --model_name vgg16_bn \
+#     --weights VGG16_BN_Weights.IMAGENET1K_V1 \
+#     --pruning_type l1 \
+#     --pruning_ratio 0.5 \
+#     --iterative --pruning_steps 5 \
+#     --taylor_batchs 10 \
+#     --data_path /ssdstore/ImageNet/ \
+#     --train_batch_size 128 \
+#     --val_batch_size 128 \
+#     --save_as saves/state_dicts/ \
+#     --test_accuracy \
+#     --rebuild \
+#     --epochs 50 --core_epochs 50 --lr-warmup-epochs 5 --lr 5e-4 \
+#     --mixup-alpha 0.8 --core_weight_decay 0.05 \
+#     --clip-grad-norm 1 --amp --ra-sampler \
+#     --distributed --model-ema --log_wandb \
+
+
+# ----------------------Imagenet----------------------
+
+
+# srun python ViT_iterative_adaptivity.py \
+#     --exp_name deit_Iter_Adaptivity_lowlr \
+#     --dataset_name imagenet \
+#     --model_name facebook/deit-base-patch16-224 \
+#     --pruning_type l1 \
+#     --pruning_ratio 0.4 \
+#     --iterative --pruning_steps 5 \
+#     --taylor_batchs 10 \
+#     --data_path /ssdstore/ImageNet/ \
+#     --train_batch_size 128 \
+#     --val_batch_size 128 \
+#     --save_as saves/state_dicts/ \
+#     --test_accuracy \
+#     --rebuild \
+#     --epochs 50 --core_epochs 50 --lr-warmup-epochs 5 --lr 5e-4 \
+#     --mixup-alpha 0.8 --core_weight_decay 0.05 --stochastic_depth \
+#     --clip-grad-norm 1 --amp --ra-sampler \
+#     --distributed --model-ema --log_wandb \
+
+
+# srun python cnn_iterative_adaptivity.py \
+#     --exp_name Resnet50_Iter_Adaptivity_SGD \
+#     --dataset_name imagenet \
+#     --model_name resnet50 \
+#     --weights ResNet50_Weights.IMAGENET1K_V2 \
+#     --pruning_type l1 \
+#     --pruning_ratio 0.5 \
+#     --iterative --pruning_steps 5 \
+#     --taylor_batchs 10 \
+#     --data_path /nvmestore/koelma/pytorch_work/ilsvrc2012/ \
+#     --train_batch_size 128 \
+#     --val_batch_size 128 \
+#     --save_as saves/state_dicts/ \
+#     --test_accuracy \
+#     --rebuild \
+#     --epochs 50 --core_epochs 50 --lr-warmup-epochs 5 --lr 0.05 \
+#     --mixup-alpha 0.8 --core_weight_decay 1e-4 --stochastic_depth \
+#     --clip-grad-norm 1 --amp --ra-sampler \
+#     --distributed --model-ema --log_wandb \
+
+echo "Job Complete"
+echo | date
